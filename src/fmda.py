@@ -62,7 +62,8 @@ def run_module():
     # Error covariance matrix condition number in kriging
     diagnostics().configure_tag("skdm_cov_cond", False, True, True)
     diagnostics().configure_tag("s2_eta_hat", True, True, True)
-    diagnostics().configure_tag("res2_sum", True, True, True)
+    diagnostics().configure_tag("res2_mean", True, True, True)
+    diagnostics().configure_tag("na_res2_mean", True, True, True)
 
     # Assimilation parameters
     diagnostics().configure_tag("assim_K0", False, True, True)
@@ -121,15 +122,15 @@ def run_module():
     E = 0.5 * (Ed[1,:,:] + Ew[1,:,:])
 
     # set up parameters
-    Q = np.eye(9) * cfg['Q']
-    P0 = np.eye(9) * cfg['P0']
+    Q = np.diag(cfg['Q'])
+    P0 = np.diag(cfg['P0'])
     dt = (tm[1] - tm[0]).seconds
     print("INFO: Computed timestep from WRF is is %g seconds." % dt)
     mresV = np.zeros_like(E)
     Kf_fn = np.zeros_like(E)
     Vf_fn = np.zeros_like(E)
     mid = np.zeros_like(E)
-    Kg = np.zeros((dom_shape[0], dom_shape[1], 9))
+    Kg = np.zeros((dom_shape[0], dom_shape[1], 5))
 
     # preprocess all static covariates
     cov_ids = cfg['covariates']
@@ -217,13 +218,13 @@ def run_module():
                 obs_vals = np.array([o.get_value() for o in obs_valid_now])
                 mod_vals = np.array([f[:,:,fuel_ndx][o.get_nearest_grid_point()] for o in obs_valid_now])
                 mod_na_vals = np.array([f_na[:,:,fuel_ndx][o.get_nearest_grid_point()] for o in obs_valid_now])
+                diagnostics().push("na_res2_mean", np.mean((obs_vals - mod_na_vals)**2))
 
                 # krige observations to grid points
                 trend_surface_model_kriging(obs_valid_now, X, Kf_fn, Vf_fn)
 
                 krig_vals = np.array([Kf_fn[o.get_nearest_grid_point()] for o in obs_valid_now])
                 diagnostics().push("assim_data", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
-
                 diagnostics().push("fm10_kriging_var", (t, np.mean(Vf_fn)))
 
                 # append to storage for kriged fields in this time instant

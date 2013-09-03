@@ -66,11 +66,18 @@ def trend_surface_model_kriging(obs_data, X, K, V):
         obs_var[i] = obs.get_measurement_variance()
 
     # remove covariates that contain only zeros
-    nz_covs = np.nonzero([np.sum(Xobs_arr[:,i]**2) for i in range(Nallcov)])[0]
+    norms = np.sum(Xobs_arr**2, axis = 0) ** 0.5
+    nz_covs = np.nonzero(norms)[0]
     Ncov = len(nz_covs)
     print('DEBUG: nz_covs = %s X.shape = %s Xobs.shape = %s' % (str(nz_covs), str(X.shape), str(Xobs.shape)))
     X = X[:,:,nz_covs]
     Xobs = Xobs[:,nz_covs]
+    norms = norms[nz_covs]
+
+    # normalize all covariates
+    for i in range(1, Ncov):
+        Xobs[:,i] *= norms[0] / norms[i]
+        X[:,:,i] *= norms[0] / norms[i]
 
     # initialize the iterative algorithm
     s2_eta_hat_old = 10.0
@@ -117,7 +124,7 @@ def trend_surface_model_kriging(obs_data, X, K, V):
     diagnostics().push("kriging_beta", beta_ext)
     diagnostics().push("kriging_iters", iters)
     diagnostics().push("kriging_subzero_s2_estimates", subzeros)
-    diagnostics().push("res2_sum", np.sum(res2))
+    diagnostics().push("res2_mean", np.mean(res2))
 
     for i in range(X.shape[0]):
 #        x_i = X[i,:,:]
