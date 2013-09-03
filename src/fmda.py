@@ -61,8 +61,8 @@ def run_module():
 
     # Error covariance matrix condition number in kriging
     diagnostics().configure_tag("skdm_cov_cond", False, True, True)
-    diagnostics().configure_tag("s2_eta_hat", False, True, True)
-    diagnostics().configure_tag("res2_sum", False, True, True)
+    diagnostics().configure_tag("s2_eta_hat", True, True, True)
+    diagnostics().configure_tag("res2_sum", True, True, True)
 
     # Assimilation parameters
     diagnostics().configure_tag("assim_K0", False, True, True)
@@ -164,7 +164,7 @@ def run_module():
         models_na[p] = CellMoistureModel((lat[p], lon[p]), 3, E[p], Tk, P0 = P0)
 
     ###  Run model for each WRF timestep and assimilate data when available
-    for t in range(1, 10):
+    for t in range(1, len(tm)):
         model_time = tm[t]
         print("INFO: time: %s, step: %d" % (str(model_time), t))
 
