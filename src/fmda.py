@@ -15,6 +15,8 @@ import numpy as np
 import os
 import sys
 import string
+from datetime import datetime
+import pytz
 
 
 def build_observation_data(stations, obs_valid_nowype):
@@ -44,6 +46,11 @@ def build_observation_data(stations, obs_valid_nowype):
     return obs_data
 
 
+def parse_datetime(s):
+    gmt_tz = pytz.timezone('GMT')
+    dt = datetime.strptime(s, "%Y/%m/%d  %H:%M:%S")
+    return dt.replace(tzinfo = gmt_tz)
+
 def run_module():
 
     # read in configuration file to execute run
@@ -60,18 +67,14 @@ def run_module():
     init_diagnostics(os.path.join(cfg['output_dir'], 'moisture_model_v1_diagnostics.txt'))
 
     # Error covariance matrix condition number in kriging
-    diagnostics().configure_tag("skdm_cov_cond", False, True, True)
+    diagnostics().configure_tag("kriging_cov_cond", True, True, True)
     diagnostics().configure_tag("s2_eta_hat", True, True, True)
     diagnostics().configure_tag("res2_mean", True, True, True)
     diagnostics().configure_tag("na_res2_mean", True, True, True)
 
     # Assimilation parameters
-    diagnostics().configure_tag("assim_K0", False, True, True)
     diagnostics().configure_tag("assim_K1", True, True, True)
     diagnostics().configure_tag("assim_data", False, False, True)
-
-    diagnostics().configure_tag("fm10_model_var", False, True, True)
-    diagnostics().configure_tag("fm10_kriging_var", False, True, True)
 
     ### Load and preprocess WRF model data
 
@@ -85,6 +88,19 @@ def run_module():
     tm = wrf_data.get_gmt_times()
     Nt = cfg['Nt'] if cfg.has_key('Nt') and cfg['Nt'] is not None else len(tm)
     dom_shape = lat.shape
+
+    # determine simulation times
+    tm_start = parse_datetime(cfg['start_time']) if cfg['start_time'] is not None else tm[0]
+    tm_end = parse_datetime(cfg['end_time']) if cfg['end_time'] is not None else tm[-1]
+
+    # if the required start time or end time are outside the simulation domain, exit with an error
+    if tm_start < tm[0] or tm_end > tm[-1]:
+        print('FATAL: invalid time range, required [%s-%s], availble [%s-%s]' %
+              (str(tm_start), str(tm_end), str(tm[0]), str(tm[-1])))
+        sys.exit(2)
+
+    print('INFO: time limits are %s to %s\nINFO: simulation is from %s to %s' %
+          (str(tm_start), str(tm_end), str(tm[0]), str(tm[-1])))
 
     # retrieve the rain variable
     rain = wrf_data['RAIN']
@@ -165,7 +181,14 @@ def run_module():
         models_na[p] = CellMoistureModel((lat[p], lon[p]), 3, E[p], Tk, P0 = P0)
 
     ###  Run model for each WRF timestep and assimilate data when available
-    for t in range(1, len(tm)):
+    t_start, t_end = 1, len(tm)-1
+    while tm_start > tm[t_start]:
+        t_start+=1
+    while tm_end < tm[t_end]:
+        t_end-=1
+
+    print('INFO: running simulation from %s (%d) to %s (%d).' % (str(tm[t_start]), t_start, str(tm[t_end]), t_end))
+    for t in range(t_start, t_end+1):
         model_time = tm[t]
         print("INFO: time: %s, step: %d" % (str(model_time), t))
 
@@ -222,6 +245,7 @@ def run_module():
 
                 # krige observations to grid points
                 trend_surface_model_kriging(obs_valid_now, X, Kf_fn, Vf_fn)
+                np.savetxt('V', Vf_fn)
 
                 krig_vals = np.array([Kf_fn[o.get_nearest_grid_point()] for o in obs_valid_now])
                 diagnostics().push("assim_data", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
@@ -261,6 +285,7 @@ def run_module():
 
     # store the diagnostics in a binary file
     diagnostics().dump_store(os.path.join(cfg['output_dir'], 'diagnostics.bin'))
+
 
 if __name__ == '__main__':
 #    import profile

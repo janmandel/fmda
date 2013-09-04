@@ -18,7 +18,7 @@ def numerical_solve_bisect(e2, eps2, k):
     # if with th eminimum possible s2_eta (which is 0), we are below target
     # then a solution does not exist
     if val_left < tgt:
-        return -1.0
+        return 0.0
 
     while val_right > tgt:
       s2_eta_right *= 2.0
@@ -47,10 +47,8 @@ def trend_surface_model_kriging(obs_data, X, K, V):
     # we ensure we have at most Nobs covariates
     Nallcov = min(X.shape[2], Nobs)
 
-    print('DEBUG: Nobs = %d Nallcov = %d' % (Nobs, Nallcov))
     # the matrix of covariates
-    Xobs_arr = np.zeros((Nobs, Nallcov))
-    Xobs = np.asmatrix(Xobs_arr)
+    Xobs = np.zeros((Nobs, Nallcov))
 
     # the vector of target observations
     y = np.zeros((Nobs,1))
@@ -62,14 +60,13 @@ def trend_surface_model_kriging(obs_data, X, K, V):
     for (obs,i) in zip(obs_data, range(Nobs)):
         p = obs.get_nearest_grid_point()
         y[i,0] = obs.get_value()
-        Xobs[i,:] = X[p[0], p[1], 0:Nallcov]
+        Xobs[i,:] = X[p[0], p[1], :Nallcov]
         obs_var[i] = obs.get_measurement_variance()
 
     # remove covariates that contain only zeros
-    norms = np.sum(Xobs_arr**2, axis = 0) ** 0.5
+    norms = np.sum(Xobs**2, axis = 0) ** 0.5
     nz_covs = np.nonzero(norms)[0]
     Ncov = len(nz_covs)
-    print('DEBUG: nz_covs = %s X.shape = %s Xobs.shape = %s' % (str(nz_covs), str(X.shape), str(Xobs.shape)))
     X = X[:,:,nz_covs]
     Xobs = Xobs[:,nz_covs]
     norms = norms[nz_covs]
@@ -78,6 +75,8 @@ def trend_surface_model_kriging(obs_data, X, K, V):
     for i in range(1, Ncov):
         Xobs[:,i] *= norms[0] / norms[i]
         X[:,:,i] *= norms[0] / norms[i]
+
+    Xobs = np.asmatrix(Xobs)
 
     # initialize the iterative algorithm
     s2_eta_hat_old = 10.0
@@ -91,21 +90,22 @@ def trend_surface_model_kriging(obs_data, X, K, V):
         s2_eta_hat_old = s2_eta_hat
 
         # recompute covariance matrix
-        Sigma = np.diag(obs_var + s2_eta_hat)
-        XtSX = Xobs.T * np.linalg.solve(Sigma, Xobs)
+        Sigma_diag = obs_var + s2_eta_hat
+        Sigma = np.diag(Sigma_diag)
+        Sigma_1 = np.diag(1.0 / Sigma_diag)
+        XtSX = Xobs.T * Sigma_1 * Xobs
 
         # QR solution method of the least squares problem
-        Sigma_1_2 = np.asmatrix(np.diag(np.diag(Sigma)**-0.5))
+        Sigma_1_2 = np.asmatrix(np.diag(Sigma_diag ** -0.5))
         yt = Sigma_1_2 * y
         Q, R = np.linalg.qr(Sigma_1_2 * Xobs)
         beta = np.linalg.solve(R, np.asmatrix(Q).T * yt)
         res2 = np.asarray(y - Xobs * beta)[:,0]**2
 
         # compute new estimate of variance of microscale variability
-        print('DEBUG: res2.shape = %s obs_var.shape = %s' % (str(res2.shape), str(obs_var.shape)))
         s2_array = res2 - obs_var
-        print('DEBUG: XtSX.shape = %s s2_array.shape = %s' % (str(XtSX.shape), str(s2_array.shape)))
-        s2_array += np.diag(Xobs * np.linalg.solve(XtSX, Xobs.T))
+        for i in range(len(s2_array)):
+            s2_array[i] += np.dot(Xobs[i,:], np.linalg.solve(XtSX, Xobs[i,:].T))
 
         s2_eta_hat = numerical_solve_bisect(res2, obs_var, Ncov)
         if s2_eta_hat < 0.0:
@@ -115,8 +115,6 @@ def trend_surface_model_kriging(obs_data, X, K, V):
         subzeros = np.count_nonzero(s2_array < 0.0)
         iters += 1
 
-    print('DEBUG: iters = %d subzeros = %d' % (iters, subzeros))
-
     # map computed betas to original (possibly extended) betas which include zero variables
     beta_ext = np.asmatrix(np.zeros((Nallcov,1)))
     beta_ext[nz_covs] = beta
@@ -125,14 +123,11 @@ def trend_surface_model_kriging(obs_data, X, K, V):
     diagnostics().push("kriging_iters", iters)
     diagnostics().push("kriging_subzero_s2_estimates", subzeros)
     diagnostics().push("res2_mean", np.mean(res2))
+    diagnostics().push("kriging_cov_cond", np.linalg.cond(XtSX))
 
     for i in range(X.shape[0]):
-#        x_i = X[i,:,:]
-#        K[i,:] = np.asarray(np.dot(x_i, beta))[:,0]
-#        V[i,:] = s2_eta_hat + np.diag(np.dot(x_i, np.linalg.solve(XtSX, x_i.T)))
-
-      for j in range(X.shape[1]):
-        x_ij = X[i,j,:]
-        K[i,j] = np.dot(x_ij, beta)
-        V[i,j] = s2_eta_hat + np.dot(x_ij, np.linalg.solve(XtSX, x_ij))
+        for j in range(X.shape[1]):
+            x_ij = X[i,j,:]
+            K[i,j] = np.dot(x_ij, beta)
+            V[i,j] = s2_eta_hat + np.dot(x_ij, np.linalg.solve(XtSX, x_ij))
 
