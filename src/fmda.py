@@ -10,6 +10,7 @@ from wrf_model_data import WRFModelData
 from cell_model_opt import CellMoistureModel
 from observation_stations import MesoWestStation
 from diagnostics import init_diagnostics, diagnostics
+from spatial_model_utilities import great_circle_distance
 
 import numpy as np
 import os
@@ -123,10 +124,12 @@ def run_module():
     # moisture equilibria are now computed from averaged Q,P,T at beginning and end of period
     Ed, Ew = wrf_data.get_moisture_equilibria()
 
-    # the first FMC_GC value gets filled out with equilibria
-    fmc_gc[0, :Nk, :, :] = (Ed + Ew) / 2
 
     ### Load observation data from the stations
+
+    # compute the diagonal distance between grid points 
+    grid_dist_km = great_circle_distance(lon[0,0], lat[0,0], lon[1,1], lat[1,1])
+    print('INFO: diagonal distance in grid is %g' % grid_dist_km)
 
     # load station data from files
     with open(cfg['station_list_file'], 'r') as f:
@@ -140,10 +143,11 @@ def run_module():
         mws = MesoWestStation(code)
         mws.load_station_info(os.path.join(cfg["station_data_dir"], "%s.info" % code))
         mws.register_to_grid(wrf_data)
-        mws.load_station_data(os.path.join(cfg["station_data_dir"], "%s.obs" % code))
-        stations.append(mws)
+        if mws.get_dist_to_grid() > grid_dist_km / 2.0:
+            mws.load_station_data(os.path.join(cfg["station_data_dir"], "%s.obs" % code))
+            stations.append(mws)
 
-    print('Loaded %d stations.' % len(stations))
+    print('Loaded %d stations (discarded %d stations, too far from grid).' % (len(stations), len(si_list) - len(stations)))
 
     # build the observation data
     obs_data_fm10 = build_observation_data(stations, 'FM')
@@ -203,6 +207,10 @@ def run_module():
         t_start+=1
     while tm_end < tm[t_end]:
         t_end-=1
+
+    # the first FMC_GC value gets filled out with equilibria
+    for i in range(Nk):
+        fmc_gc[0, i, :, :] = E
 
     print('INFO: running simulation from %s (%d) to %s (%d).' % (str(tm[t_start]), t_start, str(tm[t_end]), t_end))
     for t in range(t_start, t_end+1):
