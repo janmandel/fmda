@@ -143,7 +143,9 @@ def run_module():
         mws = MesoWestStation(code)
         mws.load_station_info(os.path.join(cfg["station_data_dir"], "%s.info" % code))
         mws.register_to_grid(wrf_data)
-        if mws.get_dist_to_grid() > grid_dist_km / 2.0:
+        if mws.get_dist_to_grid() < grid_dist_km / 2.0:
+            print('Station %s: lat %g lon %g nearest grid pt %s lat %g lon %g dist_to_grid %g' %
+               (code, mws.lat, mws.lon, str(mws.grid_pt), lat[mws.grid_pt], lon[mws.grid_pt], mws.dist_grid_pt))
             mws.load_station_data(os.path.join(cfg["station_data_dir"], "%s.obs" % code))
             stations.append(mws)
 
@@ -268,7 +270,6 @@ def run_module():
 
                 # krige observations to grid points
                 trend_surface_model_kriging(obs_valid_now, X, Kf_fn, Vf_fn)
-                np.savetxt('V', Vf_fn)
 
                 krig_vals = np.array([Kf_fn[o.get_nearest_grid_point()] for o in obs_valid_now])
                 diagnostics().push("assim_data", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
