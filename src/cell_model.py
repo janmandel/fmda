@@ -92,7 +92,7 @@ class CellMoistureModel:
         change = dt * rlag
         m_new = self.m_new
         for i in range(k):
-            if change[i] < 0.01:
+            if change[i] > 0.01:
                 m_new[i] = m[i] + (equi[i] - m[i]) * (1.0 - math.exp(-change[i]))
             else:
                 m_new[i] = m[i] + (equi[i] - m[i]) * change[i] * (1 - 0.5 * change[i])
@@ -104,7 +104,7 @@ class CellMoistureModel:
             
             for i in range(k):
             
-                if change[i] < 0.01:
+                if change[i] > 0.01:
                     
                     # partial m_i/partial m_i
                     J[i,i] = math.exp(-change[i]) if model_ids[i] != 4 else 1.0
