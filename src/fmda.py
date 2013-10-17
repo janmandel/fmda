@@ -8,6 +8,7 @@ Created on Sun Oct 28 18:14:36 2012
 from kriging_methods import trend_surface_model_kriging
 from wrf_model_data import WRFModelData
 from cell_model_opt import CellMoistureModel
+#from cell_model import CellMoistureModel
 from observation_stations import MesoWestStation
 from diagnostics import init_diagnostics, diagnostics
 from spatial_model_utilities import great_circle_distance
@@ -94,7 +95,12 @@ def run_module():
 
     # re-open the WRF file for writing FMC_G variables
     wrf_file = netCDF4.Dataset(cfg['wrf_output'], 'a')
-    fmc_gc = wrf_file.variables['FMC_GC']
+    if 'FMC_GC' in wrf_file.variables:
+        fmc_gc = wrf_file.variables['FMC_GC']
+        print('INFO: FMC_GC variable found, will write output')
+    else:
+        fmc_gc = None
+        print('INFO: FMC_GC variable not in netCDF file, not writing output to file')
 
     # read in spatial and temporal extent of WRF variables
     lat, lon = wrf_data.get_lats(), wrf_data.get_lons()
@@ -211,8 +217,9 @@ def run_module():
         t_end-=1
 
     # the first FMC_GC value gets filled out with equilibria
-    for i in range(Nk):
-        fmc_gc[0, i, :, :] = E
+    if fmc_gc is not None:
+        for i in range(Nk):
+            fmc_gc[0, i, :, :] = E
 
     print('INFO: running simulation from %s (%d) to %s (%d).' % (str(tm[t_start]), t_start, str(tm[t_end]), t_end))
     for t in range(t_start, t_end+1):
@@ -303,8 +310,9 @@ def run_module():
             diagnostics().push("assim_K1", (t, np.mean(Kg[:,:,1])))
 
         # store data in wrf_file variable FMC_G
-        for p in np.ndindex(dom_shape):
-            fmc_gc[t, :Nk, p[0], p[1]] = models[p].get_state()[:Nk]
+        if fmc_gc is not None:
+            for p in np.ndindex(dom_shape):
+                fmc_gc[t, :Nk, p[0], p[1]] = models[p].get_state()[:Nk]
 
     # store the diagnostics in a binary file
     diagnostics().dump_store(os.path.join(cfg['output_dir'], 'diagnostics.bin'))
