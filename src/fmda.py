@@ -10,6 +10,7 @@ from wrf_model_data import WRFModelData
 from cell_model_opt import CellMoistureModel
 from observation_stations import MesoWestStation
 from diagnostics import init_diagnostics, diagnostics
+from spatial_model_utilities import great_circle_distance
 
 import numpy as np
 import os
@@ -17,6 +18,15 @@ import sys
 import string
 from datetime import datetime
 import pytz
+import netCDF4
+
+
+def total_seconds(tdelta):
+    """
+    Utility function for python < 2.7, 2.7 and above have total_seconds()
+    as a function of timedelta.
+    """
+    return tdelta.microseconds / 1e6 + (tdelta.seconds + tdelta.days * 24 * 3600)
 
 
 def build_observation_data(stations, obs_valid_nowype):
@@ -82,6 +92,10 @@ def run_module():
     wrf_data = WRFModelData(cfg['wrf_output'],  ['T2', 'Q2', 'PSFC', 'RAINNC', 'RAINC', 'HGT'])
     wrf_data.slice_field('HGT')
 
+    # re-open the WRF file for writing FMC_G variables
+    wrf_file = netCDF4.Dataset(cfg['wrf_output'], 'a')
+    fmc_gc = wrf_file.variables['FMC_GC']
+
     # read in spatial and temporal extent of WRF variables
     lat, lon = wrf_data.get_lats(), wrf_data.get_lons()
     hgt = wrf_data['HGT']
@@ -110,7 +124,12 @@ def run_module():
     # moisture equilibria are now computed from averaged Q,P,T at beginning and end of period
     Ed, Ew = wrf_data.get_moisture_equilibria()
 
+
     ### Load observation data from the stations
+
+    # compute the diagonal distance between grid points 
+    grid_dist_km = great_circle_distance(lon[0,0], lat[0,0], lon[1,1], lat[1,1])
+    print('INFO: diagonal distance in grid is %g' % grid_dist_km)
 
     # load station data from files
     with open(cfg['station_list_file'], 'r') as f:
@@ -124,10 +143,13 @@ def run_module():
         mws = MesoWestStation(code)
         mws.load_station_info(os.path.join(cfg["station_data_dir"], "%s.info" % code))
         mws.register_to_grid(wrf_data)
-        mws.load_station_data(os.path.join(cfg["station_data_dir"], "%s.obs" % code))
-        stations.append(mws)
+        if mws.get_dist_to_grid() < grid_dist_km / 2.0:
+            print('Station %s: lat %g lon %g nearest grid pt %s lat %g lon %g dist_to_grid %g' %
+               (code, mws.lat, mws.lon, str(mws.grid_pt), lat[mws.grid_pt], lon[mws.grid_pt], mws.dist_grid_pt))
+            mws.load_station_data(os.path.join(cfg["station_data_dir"], "%s.obs" % code))
+            stations.append(mws)
 
-    print('Loaded %d stations.' % len(stations))
+    print('Loaded %d stations (discarded %d stations, too far from grid).' % (len(stations), len(si_list) - len(stations)))
 
     # build the observation data
     obs_data_fm10 = build_observation_data(stations, 'FM')
@@ -138,15 +160,17 @@ def run_module():
     E = 0.5 * (Ed[1,:,:] + Ew[1,:,:])
 
     # set up parameters
+    Nk = 4  # we simulate 4 types of fuel
     Q = np.diag(cfg['Q'])
     P0 = np.diag(cfg['P0'])
+    Tk = np.array([1.0, 10.0, 100.0, 1000.0]) * 3600
     dt = (tm[1] - tm[0]).seconds
     print("INFO: Computed timestep from WRF is is %g seconds." % dt)
     mresV = np.zeros_like(E)
     Kf_fn = np.zeros_like(E)
     Vf_fn = np.zeros_like(E)
     mid = np.zeros_like(E)
-    Kg = np.zeros((dom_shape[0], dom_shape[1], 5))
+    Kg = np.zeros((dom_shape[0], dom_shape[1], len(Tk)+2))
 
     # preprocess all static covariates
     cov_ids = cfg['covariates']
@@ -173,12 +197,11 @@ def run_module():
     assim_time_win = cfg['assimilation_time_window']
 
     # construct model grid using standard fuel parameters
-    Tk = np.array([1.0, 10.0, 100.0]) * 3600
     models = np.zeros(dom_shape, dtype = np.object)
     models_na = np.zeros_like(models)
     for p in np.ndindex(dom_shape):
-        models[p] = CellMoistureModel((lat[p], lon[p]), 3, E[p], Tk, P0 = P0)
-        models_na[p] = CellMoistureModel((lat[p], lon[p]), 3, E[p], Tk, P0 = P0)
+        models[p] = CellMoistureModel((lat[p], lon[p]), 4, E[p], Tk, P0 = P0)
+        models_na[p] = CellMoistureModel((lat[p], lon[p]), 4, E[p], Tk, P0 = P0)
 
     ###  Run model for each WRF timestep and assimilate data when available
     t_start, t_end = 1, len(tm)-1
@@ -186,6 +209,10 @@ def run_module():
         t_start+=1
     while tm_end < tm[t_end]:
         t_end-=1
+
+    # the first FMC_GC value gets filled out with equilibria
+    for i in range(Nk):
+        fmc_gc[0, i, :, :] = E
 
     print('INFO: running simulation from %s (%d) to %s (%d).' % (str(tm[t_start]), t_start, str(tm[t_end]), t_end))
     for t in range(t_start, t_end+1):
@@ -199,13 +226,11 @@ def run_module():
             models_na[p].advance_model(Ed[t-1, i, j], Ew[t-1, i, j], rain[t-1, i, j], dt, Q)
 
         # prepare visualization data
-        f = np.zeros((dom_shape[0], dom_shape[1], 3))
-        f_na = np.zeros((dom_shape[0], dom_shape[1], 3))
+        f = np.zeros((dom_shape[0], dom_shape[1], Nk))
+        f_na = np.zeros((dom_shape[0], dom_shape[1], Nk))
         for p in np.ndindex(dom_shape):
-            f[p[0], p[1], :] = models[p].get_state()[:3]
-            f_na[p[0], p[1], :] = models_na[p].get_state()[:3]
-            P = models[p].get_state_covar()
-            mid[p] = models[p].get_model_ids()[1]
+            f[p[0], p[1], :] = models[p].get_state()[:Nk]
+            f_na[p[0], p[1], :] = models_na[p].get_state()[:Nk]
 
         # run Kriging on each observed fuel type
         Kf = []
@@ -214,7 +239,7 @@ def run_module():
         for obs_data, fuel_ndx in [ (obs_data_fm10, 1) ]:
 
             # run the kriging subsystem and the Kalman update only if have valid observations
-            valid_times = [z for z in obs_data.keys() if abs((z - model_time).total_seconds()) < assim_time_win/2.0]
+            valid_times = [z for z in obs_data.keys() if abs(total_seconds(z - model_time)) < assim_time_win/2.0]
             print('INFO: there are %d valid times at model time %s' % (len(valid_times), str(model_time)))
             if len(valid_times) > 0:
 
@@ -245,7 +270,6 @@ def run_module():
 
                 # krige observations to grid points
                 trend_surface_model_kriging(obs_valid_now, X, Kf_fn, Vf_fn)
-                np.savetxt('V', Vf_fn)
 
                 krig_vals = np.array([Kf_fn[o.get_nearest_grid_point()] for o in obs_valid_now])
                 diagnostics().push("assim_data", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
@@ -278,13 +302,14 @@ def run_module():
             # push new diagnostic outputs
             diagnostics().push("assim_K1", (t, np.mean(Kg[:,:,1])))
 
-        # prepare visualization data
-        f = np.zeros((dom_shape[0], dom_shape[1], 3))
+        # store data in wrf_file variable FMC_G
         for p in np.ndindex(dom_shape):
-            f[p[0], p[1], :] = models[p].get_state()[:3]
+            fmc_gc[t, :Nk, p[0], p[1]] = models[p].get_state()[:Nk]
 
     # store the diagnostics in a binary file
     diagnostics().dump_store(os.path.join(cfg['output_dir'], 'diagnostics.bin'))
+
+    wrf_file.close() 
 
 
 if __name__ == '__main__':

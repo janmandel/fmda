@@ -5,11 +5,11 @@ import math
 
 class CellMoistureModel:
 
-    Tk = np.array([1, 10, 100]) * 3600.0    # nominal fuel delays
-    r0 = 0.05                               # threshold rainfall [mm/h]
-    rk = 8                                  # saturation rain intensity [mm/h]
-    Trk = 14 * 3600                         # time constant for wetting model [s]
-    S = 2.5                                 # saturation intensity [dimensionless]
+    Tk = np.array([1, 10, 100, 1000]) * 3600.0    # nominal fuel delays
+    r0 = 0.05                                     # threshold rainfall [mm/h]
+    rk = 8                                        # saturation rain intensity [mm/h]
+    Trk = 14 * 3600                               # time constant for wetting model [s]
+    S = 2.5                                       # saturation intensity [dimensionless]
     
     
     def __init__(self, latlon, k, m0 = None, Tk = None, P0 = None):
