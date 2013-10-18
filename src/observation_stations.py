@@ -29,6 +29,7 @@ class Observation:
         self.obs_val = obs
         self.field_name = field_name
         self.obs_var = var
+        self.nearest_grid_pt_override = None
 
 
     def get_time(self):
@@ -63,7 +64,17 @@ class Observation:
         """
         Return the indices that identify the nearest grid point.
         """
-        return self.s.get_nearest_grid_point()
+        if self.nearest_grid_pt_override is None:
+            return self.s.get_nearest_grid_point()
+        else:
+            return self.nearest_grid_pt_override
+
+
+    def set_nearest_grid_point(self, ngp):
+        """
+        Override the nearest grid point - used for TSM testing.
+        """
+        self.nearest_grid_pt_override = ngp
 
 
     def get_station(self):
@@ -158,7 +169,8 @@ class Station:
         """
         Returns a list of Observations for given observation type (var name).
         """
-        return self.obs[obs_type]
+        return self.obs[obs_type] if obs_type in self.obs else []
+
 
 
 
@@ -195,7 +207,7 @@ class MesoWestStation(Station):
             self.lat, self.lon = float(loc_str[0]), float(loc_str[1])
 
             # read elevation
-            self.elevations = float(readline_skip_comments(f))
+            self.elevation = float(readline_skip_comments(f))
 
             # read sensor types
             self.sensors = map(lambda x: x.strip(), readline_skip_comments(f).split(","))
