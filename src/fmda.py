@@ -123,7 +123,7 @@ def run_module():
     print('INFO: time limits are %s to %s\nINFO: simulation is from %s to %s' %
           (str(tm_start), str(tm_end), str(tm[0]), str(tm[-1])))
 
-    # retrieve the rain variable
+    # retrieve the rain variables
     rain = wrf_data['RAIN']
     T2 = 273.15 + 21.0 - wrf_data['T2']
     PSFC = wrf_data['PSFC']
@@ -275,8 +275,6 @@ def run_module():
 
                 # krige observations to grid points
                 trend_surface_model_kriging(obs_valid_now, X, Kf_fn, Vf_fn)
-
-                print('MAX value %g MAX vari %g' % (np.amax(Kf_fn), np.amax(Vf_fn)))
 
                 krig_vals = np.array([Kf_fn[o.get_nearest_grid_point()] for o in obs_valid_now])
                 diagnostics().push("assim_data", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
