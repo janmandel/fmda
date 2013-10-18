@@ -7,8 +7,9 @@ Created on Sun Oct 28 18:14:36 2012
 
 from kriging_methods import trend_surface_model_kriging
 from wrf_model_data import WRFModelData
-from cell_model_opt import CellMoistureModel
+#from cell_model_opt import CellMoistureModel
 #from cell_model import CellMoistureModel
+from grid_moisture_model import GridMoistureModel
 from observation_stations import MesoWestStation
 from diagnostics import init_diagnostics, diagnostics
 from spatial_model_utilities import great_circle_distance
@@ -30,12 +31,12 @@ def total_seconds(tdelta):
     return tdelta.microseconds / 1e6 + (tdelta.seconds + tdelta.days * 24 * 3600)
 
 
-def build_observation_data(stations, obs_valid_nowype):
+def build_observation_data(stations, obs_type):
     """
     Repackage the matched time series into a time-indexed structure
     which gives details on the observed data and active observation stations.
 
-        synopsis: obs_data = build_observation_data(stations, obs_valid_nowype)
+        synopsis: obs_data = build_observation_data(stations, obs_type)
 
     """
     Ns = len(stations)
@@ -43,7 +44,7 @@ def build_observation_data(stations, obs_valid_nowype):
     # accumulate all observations from stations
     observations = []
     for s in stations:
-        observations.extend(s.get_observations(obs_valid_nowype))
+        observations.extend(s.get_observations(obs_type))
 
     # repackage all the observations into a time-indexed structure which groups
     # observations at the same time together
@@ -124,12 +125,15 @@ def run_module():
 
     # retrieve the rain variable
     rain = wrf_data['RAIN']
-    T2 = wrf_data['T2']
+    T2 = 273.15 + 21.0 - wrf_data['T2']
     PSFC = wrf_data['PSFC']
+
+    # numerical fix - if it rains at an intensity of less than 0.001 per hour, set rain to zero
+    # without this, numerical errors in trend surface model may pop up
+    rain[rain < 0.001] = 0.0
 
     # moisture equilibria are now computed from averaged Q,P,T at beginning and end of period
     Ed, Ew = wrf_data.get_moisture_equilibria()
-
 
     ### Load observation data from the stations
 
@@ -177,6 +181,8 @@ def run_module():
     Vf_fn = np.zeros_like(E)
     mid = np.zeros_like(E)
     Kg = np.zeros((dom_shape[0], dom_shape[1], len(Tk)+2))
+    f = np.zeros((dom_shape[0], dom_shape[1], Nk))
+    f_na = np.zeros((dom_shape[0], dom_shape[1], Nk))
 
     # preprocess all static covariates
     cov_ids = cfg['covariates']
@@ -203,11 +209,8 @@ def run_module():
     assim_time_win = cfg['assimilation_time_window']
 
     # construct model grid using standard fuel parameters
-    models = np.zeros(dom_shape, dtype = np.object)
-    models_na = np.zeros_like(models)
-    for p in np.ndindex(dom_shape):
-        models[p] = CellMoistureModel((lat[p], lon[p]), 4, E[p], Tk, P0 = P0)
-        models_na[p] = CellMoistureModel((lat[p], lon[p]), 4, E[p], Tk, P0 = P0)
+    models = GridMoistureModel(E[:,:,np.newaxis][:,:,np.zeros((4,),dtype=np.int)], Tk, P0)
+    models_na = GridMoistureModel(E[:,:,np.newaxis][:,:,np.zeros((4,),dtype=np.int)], Tk, P0)
 
     ###  Run model for each WRF timestep and assimilate data when available
     t_start, t_end = 1, len(tm)-1
@@ -227,17 +230,12 @@ def run_module():
         print("INFO: time: %s, step: %d" % (str(model_time), t))
 
         # run the model update
-        for p in np.ndindex(dom_shape):
-            i, j = p
-            models[p].advance_model(Ed[t-1, i, j], Ew[t-1, i, j], rain[t-1, i, j], dt, Q)
-            models_na[p].advance_model(Ed[t-1, i, j], Ew[t-1, i, j], rain[t-1, i, j], dt, Q)
+        models.advance_model(Ed[t-1,:,:], Ew[t-1,:,:], rain[t-1,:,:], dt, Q)
+        models_na.advance_model(Ed[t-1,:,:], Ew[t-1,:,:], rain[t-1,:,:], dt, Q)
 
-        # prepare visualization data
-        f = np.zeros((dom_shape[0], dom_shape[1], Nk))
-        f_na = np.zeros((dom_shape[0], dom_shape[1], Nk))
-        for p in np.ndindex(dom_shape):
-            f[p[0], p[1], :] = models[p].get_state()[:Nk]
-            f_na[p[0], p[1], :] = models_na[p].get_state()[:Nk]
+        # extract fuel moisture contents 
+        f[:,:,:] = models.get_state()[:,:,:Nk].copy()
+        f_na[:,:,:] = models.get_state()[:,:,:Nk].copy()
 
         # run Kriging on each observed fuel type
         Kf = []
@@ -278,6 +276,8 @@ def run_module():
                 # krige observations to grid points
                 trend_surface_model_kriging(obs_valid_now, X, Kf_fn, Vf_fn)
 
+                print('MAX value %g MAX vari %g' % (np.amax(Kf_fn), np.amax(Vf_fn)))
+
                 krig_vals = np.array([Kf_fn[o.get_nearest_grid_point()] for o in obs_valid_now])
                 diagnostics().push("assim_data", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
                 diagnostics().push("fm10_kriging_var", (t, np.mean(Vf_fn)))
@@ -291,20 +291,16 @@ def run_module():
         # if there were any observations, run the kalman update step
         if len(fn) > 0:
             Nobs = len(fn)
-            # run the kalman update in each model independently
-            # gather the standard deviations of the moisture fuel after the Kalman update
-            for p in np.ndindex(dom_shape):
-                O = np.zeros((Nobs,))
-                V = np.zeros((Nobs, Nobs))
 
-                # construct observations for this position
-                for i in range(Nobs):
-                    O[i] = Kf[i][p]
-                    V[i,i] = Vf[i][p]
+            O = np.zeros((dom_shape[0], dom_shape[1], Nobs))
+            V = np.zeros((dom_shape[0], dom_shape[1], Nobs, Nobs))
 
-                # execute the Kalman update
-                Kp = models[p].kalman_update(O, V, fn)
-                Kg[p[0], p[1], :] = Kp[:, 0]
+            for i in range(Nobs):
+              O[:,:,i] = Kf[i]
+              V[:,:,i,i] = Vf[i]
+
+            # execute the Kalman update
+            models.kalman_update(O, V, fn, Kg)
 
             # push new diagnostic outputs
             diagnostics().push("assim_K1", (t, np.mean(Kg[:,:,1])))
@@ -317,7 +313,7 @@ def run_module():
     # store the diagnostics in a binary file
     diagnostics().dump_store(os.path.join(cfg['output_dir'], 'diagnostics.bin'))
 
-    wrf_file.close() 
+    wrf_file.close()
 
 
 if __name__ == '__main__':
