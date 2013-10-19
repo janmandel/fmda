@@ -200,17 +200,17 @@ class GridMoistureModel:
         Ho = H[fuel_types,:]
 
         for s in np.ndindex(P[:,:,0,0].shape):
-          # re-use P2 to store forecast covariance for position s
-          P2[:,:] = P[s[0],s[1],:,:]
+            # re-use P2 to store forecast covariance for position s
+	    P2[:,:] = P[s[0],s[1],:,:]
 
-          # compute Kalman gain
-          I = np.dot(np.dot(Ho, P2), Ho.T) + V[s[0],s[1],:,:]
-          K = np.dot(np.dot(P2, Ho.T), np.linalg.inv(I))
+	    # compute Kalman gain
+	    I = np.dot(np.dot(Ho, P2), Ho.T) + V[s[0],s[1],:,:]
+	    K = np.dot(np.dot(P2, Ho.T), np.linalg.inv(I))
 
-          # update state and state covariance
-          self.m_ext[s[0],s[1],:] += np.dot(K, O[s[0],s[1],:] - self.m_ext[s[0],s[1],fuel_types])
-          P[s[0],s[1],:,:] -= np.dot(np.dot(K, Ho), P2)
+	    # update state and state covariance
+	    self.m_ext[s[0],s[1],:] += np.dot(K, O[s[0],s[1],:] - self.m_ext[s[0],s[1],fuel_types])
+	    P[s[0],s[1],:,:] -= np.dot(np.dot(K, Ho), P2)
 
-          if Kg is not None:
-              Kg[s[0],s[1],:] = K[:,0]
+	    if Kg is not None:
+	        Kg[s[0],s[1],:] = K[:,0]
 
