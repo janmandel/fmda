@@ -80,13 +80,27 @@ def run_module():
 
     # Error covariance matrix condition number in kriging
     diagnostics().configure_tag("kriging_cov_cond", True, True, True)
-    diagnostics().configure_tag("s2_eta_hat", True, True, True)
+    diagnostics().configure_tag("s2_eta_hat", False, True, True)
     diagnostics().configure_tag("res2_mean", True, True, True)
     diagnostics().configure_tag("na_res2_mean", True, True, True)
 
     # Assimilation parameters
-    diagnostics().configure_tag("assim_K1", True, True, True)
+    diagnostics().configure_tag("K1", False, False, True)
     diagnostics().configure_tag("assim_data", False, False, True)
+
+    # Model forecast, analysis and non-assimilated model
+    diagnostics().configure_tag("fm10f", False, True, True)
+    diagnostics().configure_tag("fm10a", False, True, True)
+    diagnostics().configure_tag("fm10na", False, True, True)
+   
+    # all simulation times and all assimilation times (subset)
+    diagnostics().configure_tag("mta", False, True, True)
+    diagnostics().configure_tag("mt", False, True, True)
+
+    # observation values and their nearest grid points
+    diagnostics().configure_tag("obs_vals", False, True, True)
+    diagnostics().configure_tag("obs_ngp", False, True, True)
+
 
     ### Load and preprocess WRF model data
 
@@ -131,6 +145,9 @@ def run_module():
     # numerical fix - if it rains at an intensity of less than 0.001 per hour, set rain to zero
     # without this, numerical errors in trend surface model may pop up
     rain[rain < 0.001] = 0.0
+    
+    # use the log of rain
+    rain = np.log(rain + 1.0)
 
     # moisture equilibria are now computed from averaged Q,P,T at beginning and end of period
     Ed, Ew = wrf_data.get_moisture_equilibria()
@@ -151,7 +168,7 @@ def run_module():
     stations = []
     for code in si_list:
         mws = MesoWestStation(code)
-        mws.load_station_info(os.path.join(cfg["station_data_dir"], "%s.info" % code))
+        mws.load_station_info(os.path.join(cfg["station_info_dir"], "%s.info" % code))
         mws.register_to_grid(wrf_data)
         if mws.get_dist_to_grid() < grid_dist_km / 2.0:
             print('Station %s: lat %g lon %g nearest grid pt %s lat %g lon %g dist_to_grid %g' %
@@ -229,13 +246,19 @@ def run_module():
         model_time = tm[t]
         print("INFO: time: %s, step: %d" % (str(model_time), t))
 
+	diagnostics().push("mt", model_time)
+
         # run the model update
         models.advance_model(Ed[t-1,:,:], Ew[t-1,:,:], rain[t-1,:,:], dt, Q)
         models_na.advance_model(Ed[t-1,:,:], Ew[t-1,:,:], rain[t-1,:,:], dt, Q)
 
         # extract fuel moisture contents 
         f[:,:,:] = models.get_state()[:,:,:Nk].copy()
-        f_na[:,:,:] = models.get_state()[:,:,:Nk].copy()
+        f_na[:,:,:] = models_na.get_state()[:,:,:Nk].copy()
+
+	# push 10-hr fuel state
+	diagnostics().push("fm10f", f[:,:,1])
+	diagnostics().push("fm10na", f_na[:,:,1])
 
         # run Kriging on each observed fuel type
         Kf = []
@@ -247,6 +270,9 @@ def run_module():
             valid_times = [z for z in obs_data.keys() if abs(total_seconds(z - model_time)) < assim_time_win/2.0]
             print('INFO: there are %d valid times at model time %s' % (len(valid_times), str(model_time)))
             if len(valid_times) > 0:
+
+		# add model time as time when assimilation occurred
+		diagnostics().push("mta", model_time)
 
                 # retrieve observations for current time
                 obs_valid_now = []
@@ -268,13 +294,24 @@ def run_module():
                     error('FATAL: found unknown covariate %s' % cov_id)
 
                 # find differences (residuals) between observed measurements and nearest grid points
-                obs_vals = np.array([o.get_value() for o in obs_valid_now])
+                obs_vals = [o.get_value() for o in obs_valid_now]
+		obs_ngp = [o.get_nearest_grid_point() for o in obs_valid_now]
+		diagnostics().push("obs_vals", obs_vals)
+		diagnostics().push("obs_ngp", obs_ngp)
+
                 mod_vals = np.array([f[:,:,fuel_ndx][o.get_nearest_grid_point()] for o in obs_valid_now])
                 mod_na_vals = np.array([f_na[:,:,fuel_ndx][o.get_nearest_grid_point()] for o in obs_valid_now])
                 diagnostics().push("na_res2_mean", np.mean((obs_vals - mod_na_vals)**2))
 
                 # krige observations to grid points
                 trend_surface_model_kriging(obs_valid_now, X, Kf_fn, Vf_fn)
+		if np.count_nonzero(Kf_fn > 2.5) > 0:
+		    print('WARN: found %d values over 2.5, %d of those had rain' %
+                            (np.count_nonzero(Kf_fn > 2.5),  np.count_nonzero(np.logical_and(Kf_fn > 2.5, dynamic_covar_map['rain'][t,:,:] > 0.0))))
+		    Kf_fn[Kf_fn > 2.5] = 0.0
+		if np.count_nonzero(Kf_fn < 0.0) > 0:
+		    print('WARN: found %d values under 0.0' % np.count_nonzero(Kf_fn < 0.0))
+		    Kf_fn[Kf_fn < 0.0] = 0.0
 
                 krig_vals = np.array([Kf_fn[o.get_nearest_grid_point()] for o in obs_valid_now])
                 diagnostics().push("assim_data", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
@@ -301,7 +338,8 @@ def run_module():
             models.kalman_update(O, V, fn, Kg)
 
             # push new diagnostic outputs
-            diagnostics().push("assim_K1", (t, np.mean(Kg[:,:,1])))
+            diagnostics().push("K1", (t, Kg[:,:,1]))
+	    diagnostics().push("fm10a", models.get_state()[:,:,1])
 
         # store data in wrf_file variable FMC_G
         if fmc_gc is not None:

@@ -150,7 +150,5 @@ def trend_surface_model_kriging(obs_data, X, K, V):
         for j in range(X.shape[1]):
             x_ij = X[i,j,:]
             K[i,j] = np.dot(x_ij, beta)
-            if K[i,j] > 3.0:
-              print('ERROR: Suspicious value %d %d %g, x_ij %s' % (i, j, K[i,j], str(x_ij)))
             V[i,j] = s2_eta_hat + np.dot(x_ij, np.linalg.solve(XtSX, x_ij))
 
