@@ -101,7 +101,7 @@ def trend_surface_model_kriging(obs_data, X, K, V):
     subzeros = 0
 
     # while the relative change
-    while abs( (s2_eta_hat_old - s2_eta_hat) / max(s2_eta_hat_old, 1e-8)) > 1e-2:
+    while abs( (s2_eta_hat_old - s2_eta_hat) / max(s2_eta_hat_old, 1e-8)) > 1e-3:
 #        print('TSM: iter %d s_eta_hat_old %g s2_eta_hat %g' % (iters, s2_eta_hat_old, s2_eta_hat))
         s2_eta_hat_old = s2_eta_hat
 
@@ -142,8 +142,8 @@ def trend_surface_model_kriging(obs_data, X, K, V):
     diagnostics().push("s2_eta_hat", s2_eta_hat)
     diagnostics().push("kriging_beta", beta_ext)
     diagnostics().push("kriging_iters", iters)
+    diagnostics().push("kriging_rmse", np.mean(res2)**0.5)
     diagnostics().push("kriging_subzero_s2_estimates", subzeros)
-    diagnostics().push("res2_mean", np.mean(res2))
     diagnostics().push("kriging_cov_cond", np.linalg.cond(XtSX))
 
     for i in range(X.shape[0]):

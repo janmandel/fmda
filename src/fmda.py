@@ -63,6 +63,8 @@ def parse_datetime(s):
     dt = datetime.strptime(s, "%Y/%m/%d  %H:%M:%S")
     return dt.replace(tzinfo = gmt_tz)
 
+
+
 def run_module():
 
     # read in configuration file to execute run
@@ -78,18 +80,24 @@ def run_module():
     # configure diagnostics
     init_diagnostics(os.path.join(cfg['output_dir'], 'moisture_model_v1_diagnostics.txt'))
 
-    # Error covariance matrix condition number in kriging
+    # Trend surface model diagnostics
     diagnostics().configure_tag("kriging_cov_cond", True, True, True)
-    diagnostics().configure_tag("s2_eta_hat", False, True, True)
-    diagnostics().configure_tag("res2_mean", True, True, True)
-    diagnostics().configure_tag("na_res2_mean", True, True, True)
+    diagnostics().configure_tag("s2_eta_hat", True, True, True)
+    diagnostics().configure_tag("kriging_rmse", True, True, True)
+    diagnostics().configure_tag("kriging_beta", False, True, True)
+    diagnostics().configure_tag("kriging_iters", False, True, True)
+    diagnostics().configure_tag("kriging_subzero_s2_estimates", False, True, True)
 
     # Assimilation parameters
     diagnostics().configure_tag("K1", False, False, True)
-    diagnostics().configure_tag("assim_data", False, False, True)
+    diagnostics().configure_tag("V1", False, False, True)
+    diagnostics().configure_tag("assim_info", False, False, True)
 
-    # Model forecast, analysis and non-assimilated model
+    # Model forecast, analysis and non-assimilated model: state, covariance, errors
+    diagnostics().configure_tag("fm10f_rmse", True, True, True)
+    diagnostics().configure_tag("fm10na_rmse", True, True, True)
     diagnostics().configure_tag("fm10f", False, True, True)
+    diagnostics().configure_tag("fm10f_V1", False, True, True)
     diagnostics().configure_tag("fm10a", False, True, True)
     diagnostics().configure_tag("fm10na", False, True, True)
    
@@ -256,8 +264,9 @@ def run_module():
         f[:,:,:] = models.get_state()[:,:,:Nk].copy()
         f_na[:,:,:] = models_na.get_state()[:,:,:Nk].copy()
 
-	# push 10-hr fuel state
+	# push 10-hr fuel state & variance of forecast
 	diagnostics().push("fm10f", f[:,:,1])
+	diagnostics().push("fm10f_V1", models.P[:,:,1,1])
 	diagnostics().push("fm10na", f_na[:,:,1])
 
         # run Kriging on each observed fuel type
@@ -301,7 +310,8 @@ def run_module():
 
                 mod_vals = np.array([f[:,:,fuel_ndx][o.get_nearest_grid_point()] for o in obs_valid_now])
                 mod_na_vals = np.array([f_na[:,:,fuel_ndx][o.get_nearest_grid_point()] for o in obs_valid_now])
-                diagnostics().push("na_res2_mean", np.mean((obs_vals - mod_na_vals)**2))
+    		diagnostics().push("fm10f_rmse", np.mean((obs_vals - mod_vals)**2)**0.5)
+                diagnostics().push("fm10na_rmse", np.mean((obs_vals - mod_na_vals)**2)**0.5)
 
                 # krige observations to grid points
                 trend_surface_model_kriging(obs_valid_now, X, Kf_fn, Vf_fn)
@@ -314,8 +324,8 @@ def run_module():
 		    Kf_fn[Kf_fn < 0.0] = 0.0
 
                 krig_vals = np.array([Kf_fn[o.get_nearest_grid_point()] for o in obs_valid_now])
-                diagnostics().push("assim_data", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
-                diagnostics().push("fm10_kriging_var", (t, np.mean(Vf_fn)))
+                diagnostics().push("assim_info", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
+                diagnostics().push("V1", Vf_fn)
 
                 # append to storage for kriged fields in this time instant
                 Kf.append(Kf_fn)
@@ -346,9 +356,10 @@ def run_module():
             for p in np.ndindex(dom_shape):
                 fmc_gc[t, :Nk, p[0], p[1]] = models[p].get_state()[:Nk]
 
-    # store the diagnostics in a binary file
+    # store the diagnostics in a binary file when done
     diagnostics().dump_store(os.path.join(cfg['output_dir'], 'diagnostics.bin'))
 
+    # close the netCDF file (relevant if we did write into FMC_GC)
     wrf_file.close()
 
 
