@@ -4,14 +4,14 @@ import numpy as np
 
 class GridMoistureModel:
 
-    Tk = np.array([1, 10, 100, 1000]) * 3600.0    # nominal fuel delays
-    r0 = 0.05                                     # threshold rainfall [mm/h]
-    rk = 8                                        # saturation rain intensity [mm/h]
-    Trk = 14 * 3600                               # time constant for wetting model [s]
-    S = 2.5                                       # saturation intensity [dimensionless]
+    Tk = np.array([1.0, 10.0, 100.0, 1000.0]) * 3600    # nominal fuel delays
+    r0 = 0.05                                           # threshold rainfall [mm/h]
+    rk = 8                                              # saturation rain intensity [mm/h]
+    Trk = 14 * 3600                                     # time constant for wetting model [s]
+    S = 2.5                                             # saturation intensity [dimensionless]
 
 
-    def __init__(self, m0 = None, Tk = None, P0 = None):
+    def __init__(self, m0, Tk = None, P0 = None):
         """
         Initialize the model with given position and moisture levels.
 
@@ -26,8 +26,7 @@ class GridMoistureModel:
         dim = k + 2
         assert k == len(self.Tk)
         self.m_ext = np.zeros((s0,s1,dim))
-        if m0 is not None:
-            self.m_ext[:,:,:k] = m0
+        self.m_ext[:,:,:k] = m0
 
         # note: the moisture advance will proceed by fuel moisture types
         # thus we only need space for one class at a time
@@ -74,8 +73,8 @@ class GridMoistureModel:
         P2 = self.P2
 
         # add assimilated equilibrium difference, which is shared across spatial locations
-        EdA = Ed + m_ext[:,:,k]
-        EwA = Ew + m_ext[:,:,k]
+        Ed += m_ext[:,:,k]
+        Ew += m_ext[:,:,k]
 
         dS = m_ext[:,:,k+1]
 
@@ -97,7 +96,7 @@ class GridMoistureModel:
 
             # initialize equilibrium with current moisture
             m_i[:,:] = m_ext[:,:,i]
-            equi[:,:] = m_ext[:,:,i]
+            equi[:,:] = m_i
             model_ids[:] = 4
 
             # on grid locations where there is rain, modify equilibrium
@@ -105,16 +104,16 @@ class GridMoistureModel:
             no_rain = np.logical_not(has_rain)
 
             equi[has_rain] = self.S + dS[has_rain]
-            rlag[has_rain] = 1.0 / self.Trk * (1.0 - np.exp(- (r[r > self.r0] - self.r0) / self.rk))
+            rlag[has_rain] = 1.0 / self.Trk * (1.0 - np.exp(- (r[has_rain] - self.r0) / self.rk))
             model_ids[has_rain] = 3
 
             # equilibrium is selected according to current moisture level
-            is_drying = np.logical_and(no_rain, equi > EdA)
-            equi[is_drying] = EdA[is_drying]
+            is_drying = np.logical_and(no_rain, m_i > Ed)
+            equi[is_drying] = Ed[is_drying]
             model_ids[is_drying] = 1
 
-            is_wetting = np.logical_and(no_rain, equi < EwA)
-            equi[is_wetting] = EwA[is_wetting]
+            is_wetting = np.logical_and(no_rain, m_i < Ew)
+            equi[is_wetting] = Ew[is_wetting]
             model_ids[is_wetting] = 2
 
             rlag[no_rain] = 1.0 / Tk[i]
@@ -191,7 +190,7 @@ class GridMoistureModel:
           fuel_types - the fuel types for which the observations exist (used to construct observation vector)
 
         """
-        P, H, P2 = self.P, self.H, self.P2
+        m_ext, P, H, P2 = self.m_ext, self.P, self.H, self.P2
         H[:] = 0.0
 
         # construct an observation operator tailored to observed fuel types 
@@ -201,16 +200,34 @@ class GridMoistureModel:
 
         for s in np.ndindex(P[:,:,0,0].shape):
             # re-use P2 to store forecast covariance for position s
-	    P2[:,:] = P[s[0],s[1],:,:]
+            P2[:,:] = P[s[0],s[1],:,:]
 
-	    # compute Kalman gain
-	    I = np.dot(np.dot(Ho, P2), Ho.T) + V[s[0],s[1],:,:]
-	    K = np.dot(np.dot(P2, Ho.T), np.linalg.inv(I))
+            # compute Kalman gain
+            I = np.dot(np.dot(Ho, P2), Ho.T) + V[s[0],s[1],:,:]
+            K = np.dot(np.dot(P2, Ho.T), np.linalg.inv(I))
 
-	    # update state and state covariance
-	    self.m_ext[s[0],s[1],:] += np.dot(K, O[s[0],s[1],:] - self.m_ext[s[0],s[1],fuel_types])
-	    P[s[0],s[1],:,:] -= np.dot(np.dot(K, Ho), P2)
+            # update state and state covariance
+            m_ext[s[0],s[1],:] += np.dot(K, O[s[0],s[1],:] - m_ext[s[0],s[1],fuel_types])
+            P[s[0],s[1],:,:] -= np.dot(np.dot(K, Ho), P2)
 
-	    if Kg is not None:
-	        Kg[s[0],s[1],:] = K[:,0]
+            if Kg is not None:
+                Kg[s[0],s[1],:] = K[:,0]
+
+
+    def kalman_update_single(self, O, V, fuel_type, Kg = None):
+      m_ext, P, H, P2 = self.m_ext, self.P, self.H, self.P2
+      H[:] = 0
+      H[fuel_type, fuel_type] = 1.0
+      Ho = H[fuel_type,:]
+
+      for s in np.ndindex(P[:,:,0,0].shape):
+          P2[:,:] = P[s[0],s[1],:,:]
+          I = P2[fuel_type,fuel_type] + V[s[0],s[1],0,0]
+          K = P2[:,fuel_type] / I
+          m_ext[s[0],s[1],:] += np.dot(K, O[s[0],s[1],0] - m_ext[s[0],s[1],fuel_type])
+          P[s[0],s[1],:,:] -= np.dot(np.dot(K, Ho), P2)
+
+          if Kg is not None:
+              Kg[s[0],s[1],:] = K
+
 

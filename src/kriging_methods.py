@@ -51,7 +51,7 @@ def numerical_solve_bisect(e2, eps2, k):
 
 
 
-def trend_surface_model_kriging(obs_data, X, K, V):
+def trend_surface_model_kriging(obs_data, X):
     """
     Trend surface model kriging, which assumes spatially uncorrelated errors.
     The kriging results in the matrix K, which contains the kriged observations
@@ -64,6 +64,10 @@ def trend_surface_model_kriging(obs_data, X, K, V):
 
     # the matrix of covariates
     Xobs = np.zeros((Nobs, Nallcov))
+
+    # outputs
+    K = np.zeros(X[:,:,0].shape)
+    V = np.zeros_like(K)
 
     # the vector of target observations
     y = np.zeros((Nobs,1))
@@ -151,4 +155,6 @@ def trend_surface_model_kriging(obs_data, X, K, V):
             x_ij = X[i,j,:]
             K[i,j] = np.dot(x_ij, beta)
             V[i,j] = s2_eta_hat + np.dot(x_ij, np.linalg.solve(XtSX, x_ij))
+
+    return K, V
 

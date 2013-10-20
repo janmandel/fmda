@@ -7,8 +7,6 @@ Created on Sun Oct 28 18:14:36 2012
 
 from kriging_methods import trend_surface_model_kriging
 from wrf_model_data import WRFModelData
-#from cell_model_opt import CellMoistureModel
-#from cell_model import CellMoistureModel
 from grid_moisture_model import GridMoistureModel
 from observation_stations import MesoWestStation
 from diagnostics import init_diagnostics, diagnostics
@@ -74,7 +72,7 @@ def run_module():
         cfg = eval(f.read())
 
     # ensure output path exists
-    if not os.path.isdir(cfg['output_dir']): 
+    if not os.path.isdir(cfg['output_dir']):
         os.mkdir(cfg['output_dir'])
 
     # configure diagnostics
@@ -84,9 +82,10 @@ def run_module():
     diagnostics().configure_tag("kriging_cov_cond", True, True, True)
     diagnostics().configure_tag("s2_eta_hat", True, True, True)
     diagnostics().configure_tag("kriging_rmse", True, True, True)
-    diagnostics().configure_tag("kriging_beta", False, True, True)
+    diagnostics().configure_tag("kriging_beta", True, True, True)
     diagnostics().configure_tag("kriging_iters", False, True, True)
     diagnostics().configure_tag("kriging_subzero_s2_estimates", False, True, True)
+    diagnostics().configure_tag("fm10_kriging_var", True, True, True)
 
     # Assimilation parameters
     diagnostics().configure_tag("K1", False, False, True)
@@ -100,7 +99,7 @@ def run_module():
     diagnostics().configure_tag("fm10f_V1", False, True, True)
     diagnostics().configure_tag("fm10a", False, True, True)
     diagnostics().configure_tag("fm10na", False, True, True)
-   
+
     # all simulation times and all assimilation times (subset)
     diagnostics().configure_tag("mta", False, True, True)
     diagnostics().configure_tag("mt", False, True, True)
@@ -147,22 +146,23 @@ def run_module():
 
     # retrieve the rain variables
     rain = wrf_data['RAIN']
-    T2 = 273.15 + 21.0 - wrf_data['T2']
+    T2 = wrf_data['T2']
+    #T2 = 273.15 + 21.0 - wrf_data['T2']
     PSFC = wrf_data['PSFC']
 
     # numerical fix - if it rains at an intensity of less than 0.001 per hour, set rain to zero
+    # also, use log(rain + 1) to prevent wild trend surface model predictions when stations see little rain
+    # but elsewhere there is too much rain
     # without this, numerical errors in trend surface model may pop up
-    rain[rain < 0.001] = 0.0
-    
-    # use the log of rain
-    rain = np.log(rain + 1.0)
+    #rain[rain < 0.001] = 0.0
+    #rain = np.log(rain + 1.0)
 
     # moisture equilibria are now computed from averaged Q,P,T at beginning and end of period
     Ed, Ew = wrf_data.get_moisture_equilibria()
 
     ### Load observation data from the stations
 
-    # compute the diagonal distance between grid points 
+    # compute the diagonal distance between grid points
     grid_dist_km = great_circle_distance(lon[0,0], lat[0,0], lon[1,1], lat[1,1])
     print('INFO: diagonal distance in grid is %g' % grid_dist_km)
 
@@ -202,8 +202,6 @@ def run_module():
     dt = (tm[1] - tm[0]).seconds
     print("INFO: Computed timestep from WRF is is %g seconds." % dt)
     mresV = np.zeros_like(E)
-    Kf_fn = np.zeros_like(E)
-    Vf_fn = np.zeros_like(E)
     mid = np.zeros_like(E)
     Kg = np.zeros((dom_shape[0], dom_shape[1], len(Tk)+2))
     f = np.zeros((dom_shape[0], dom_shape[1], Nk))
@@ -254,34 +252,32 @@ def run_module():
         model_time = tm[t]
         print("INFO: time: %s, step: %d" % (str(model_time), t))
 
-	diagnostics().push("mt", model_time)
+        diagnostics().push("mt", model_time)
 
         # run the model update
         models.advance_model(Ed[t-1,:,:], Ew[t-1,:,:], rain[t-1,:,:], dt, Q)
         models_na.advance_model(Ed[t-1,:,:], Ew[t-1,:,:], rain[t-1,:,:], dt, Q)
 
-        # extract fuel moisture contents 
-        f[:,:,:] = models.get_state()[:,:,:Nk].copy()
-        f_na[:,:,:] = models_na.get_state()[:,:,:Nk].copy()
+        # extract fuel moisture contents
+        f[:,:,:] = models.get_state()[:,:,:Nk]
+        f_na[:,:,:] = models_na.get_state()[:,:,:Nk]
 
-	# push 10-hr fuel state & variance of forecast
-	diagnostics().push("fm10f", f[:,:,1])
-	diagnostics().push("fm10f_V1", models.P[:,:,1,1])
-	diagnostics().push("fm10na", f_na[:,:,1])
+        # push 10-hr fuel state & variance of forecast
+        diagnostics().push("fm10f", f[:,:,1])
+        diagnostics().push("fm10f_V1", models.P[:,:,1,1])
+        diagnostics().push("fm10na", f_na[:,:,1])
 
         # run Kriging on each observed fuel type
-        Kf = []
-        Vf = []
-        fn = []
+        Kfs, Vfs, fns = [], [], []
         for obs_data, fuel_ndx in [ (obs_data_fm10, 1) ]:
 
             # run the kriging subsystem and the Kalman update only if have valid observations
             valid_times = [z for z in obs_data.keys() if abs(total_seconds(z - model_time)) < assim_time_win/2.0]
-            print('INFO: there are %d valid times at model time %s' % (len(valid_times), str(model_time)))
+            print('INFO: there are %d valid times at model time %s for fuel index %d' % (len(valid_times), str(model_time), fuel_ndx))
             if len(valid_times) > 0:
 
-		# add model time as time when assimilation occurred
-		diagnostics().push("mta", model_time)
+                # add model time as time when assimilation occurred
+                diagnostics().push("mta", model_time)
 
                 # retrieve observations for current time
                 obs_valid_now = []
@@ -290,7 +286,7 @@ def run_module():
 
                 print('INFO: model time %s, assimilating %d observations.' % (str(model_time), len(obs_valid_now)))
 
-                # construct covariates for this time instant 
+                # construct covariates for this time instant
                 X[:,:,0] = f[:,:,fuel_ndx]
                 for i in range(1, Xd3):
                   cov_id = cov_ids[i-1]
@@ -304,52 +300,58 @@ def run_module():
 
                 # find differences (residuals) between observed measurements and nearest grid points
                 obs_vals = [o.get_value() for o in obs_valid_now]
-		obs_ngp = [o.get_nearest_grid_point() for o in obs_valid_now]
-		diagnostics().push("obs_vals", obs_vals)
-		diagnostics().push("obs_ngp", obs_ngp)
+                obs_ngp = [o.get_nearest_grid_point() for o in obs_valid_now]
+                diagnostics().push("obs_vals", obs_vals)
+                diagnostics().push("obs_ngp", obs_ngp)
 
-                mod_vals = np.array([f[:,:,fuel_ndx][o.get_nearest_grid_point()] for o in obs_valid_now])
-                mod_na_vals = np.array([f_na[:,:,fuel_ndx][o.get_nearest_grid_point()] for o in obs_valid_now])
-    		diagnostics().push("fm10f_rmse", np.mean((obs_vals - mod_vals)**2)**0.5)
+                mod_vals = np.array([f[ngp[0],ngp[1],fuel_ndx] for ngp in obs_ngp])
+                mod_na_vals = np.array([f_na[ngp[0],ngp[1],fuel_ndx] for ngp in obs_ngp])
+                diagnostics().push("fm10f_rmse", np.mean((obs_vals - mod_vals)**2)**0.5)
                 diagnostics().push("fm10na_rmse", np.mean((obs_vals - mod_na_vals)**2)**0.5)
 
                 # krige observations to grid points
-                trend_surface_model_kriging(obs_valid_now, X, Kf_fn, Vf_fn)
-		if np.count_nonzero(Kf_fn > 2.5) > 0:
-		    print('WARN: found %d values over 2.5, %d of those had rain' %
-                            (np.count_nonzero(Kf_fn > 2.5),  np.count_nonzero(np.logical_and(Kf_fn > 2.5, dynamic_covar_map['rain'][t,:,:] > 0.0))))
-		    Kf_fn[Kf_fn > 2.5] = 0.0
-		if np.count_nonzero(Kf_fn < 0.0) > 0:
-		    print('WARN: found %d values under 0.0' % np.count_nonzero(Kf_fn < 0.0))
-		    Kf_fn[Kf_fn < 0.0] = 0.0
+                Kf_fn, Vf_fn = trend_surface_model_kriging(obs_valid_now, X)
+                if np.count_nonzero(Kf_fn > 2.5) > 0:
+                    rain_t = dynamic_covar_map['rain'][t,:,:]
+                    print('WARN: found %d values over 2.5, %d of those had rain' %
+                            (np.count_nonzero(Kf_fn > 2.5),
+                             np.count_nonzero(np.logical_and(Kf_fn > 2.5, rain_t > 0.0))))
+#                    Kf_fn[Kf_fn > 2.5] = 2.5
+                if np.count_nonzero(Kf_fn < 0.0) > 0:
+                    print('WARN: found %d values under 0.0' % np.count_nonzero(Kf_fn < 0.0))
+#                    Kf_fn[Kf_fn < 0.0] = 0.0
 
-                krig_vals = np.array([Kf_fn[o.get_nearest_grid_point()] for o in obs_valid_now])
+                krig_vals = np.array([Kf_fn[ngp] for ngp in obs_ngp])
                 diagnostics().push("assim_info", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
                 diagnostics().push("V1", Vf_fn)
+                diagnostics().push("fm10_kriging_var", (t, np.mean(Vf_fn)))
 
                 # append to storage for kriged fields in this time instant
-                Kf.append(Kf_fn)
-                Vf.append(Vf_fn)
-                fn.append(fuel_ndx)
+                Kfs.append(Kf_fn)
+                Vfs.append(Vf_fn)
+                fns.append(fuel_ndx)
 
 
         # if there were any observations, run the kalman update step
-        if len(fn) > 0:
-            Nobs = len(fn)
+        if len(fns) > 0:
+            NobsClasses = len(fns)
 
-            O = np.zeros((dom_shape[0], dom_shape[1], Nobs))
-            V = np.zeros((dom_shape[0], dom_shape[1], Nobs, Nobs))
+            O = np.zeros((dom_shape[0], dom_shape[1], NobsClasses))
+            V = np.zeros((dom_shape[0], dom_shape[1], NobsClasses, NobsClasses))
 
-            for i in range(Nobs):
-              O[:,:,i] = Kf[i]
-              V[:,:,i,i] = Vf[i]
+            for i in range(NobsClasses):
+              O[:,:,i] = Kfs[i]
+              V[:,:,i,i] = Vfs[i]
 
             # execute the Kalman update
-            models.kalman_update(O, V, fn, Kg)
+            if len(fns) == 1:
+                models.kalman_update_single(O, V, fns[0], Kg)
+            else:
+                models.kalman_update(O, V, fns, Kg)
 
             # push new diagnostic outputs
             diagnostics().push("K1", (t, Kg[:,:,1]))
-	    diagnostics().push("fm10a", models.get_state()[:,:,1])
+            diagnostics().push("fm10a", models.get_state()[:,:,1])
 
         # store data in wrf_file variable FMC_G
         if fmc_gc is not None:
