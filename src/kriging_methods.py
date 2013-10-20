@@ -106,7 +106,7 @@ def trend_surface_model_kriging(obs_data, X):
 
     # while the relative change
     while abs( (s2_eta_hat_old - s2_eta_hat) / max(s2_eta_hat_old, 1e-8)) > 1e-3:
-#        print('TSM: iter %d s_eta_hat_old %g s2_eta_hat %g' % (iters, s2_eta_hat_old, s2_eta_hat))
+        print('TSM: iter %d s_eta_hat_old %g s2_eta_hat %g' % (iters, s2_eta_hat_old, s2_eta_hat))
         s2_eta_hat_old = s2_eta_hat
 
         # recompute covariance matrix
@@ -114,7 +114,7 @@ def trend_surface_model_kriging(obs_data, X):
         Sigma = np.diag(Sigma_diag)
         Sigma_1 = np.diag(1.0 / Sigma_diag)
         XtSX = Xobs.T * Sigma_1 * Xobs
-#        print('TSM: XtSX = %s' % str(XtSX))
+        #print('TSM: XtSX = %s' % str(XtSX))
 
         # QR solution method of the least squares problem
         Sigma_1_2 = np.asmatrix(np.diag(Sigma_diag ** -0.5))
@@ -155,6 +155,8 @@ def trend_surface_model_kriging(obs_data, X):
             x_ij = X[i,j,:]
             K[i,j] = np.dot(x_ij, beta)
             V[i,j] = s2_eta_hat + np.dot(x_ij, np.linalg.solve(XtSX, x_ij))
+            if V[i,j] < 0.0:
+              print("ERROR: negative kriging variance!")
 
     return K, V
 

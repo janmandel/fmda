@@ -8,6 +8,7 @@ Created on Sun Oct 28 18:14:36 2012
 from kriging_methods import trend_surface_model_kriging
 from wrf_model_data import WRFModelData
 from grid_moisture_model import GridMoistureModel
+from cell_model_opt import CellMoistureModel
 from observation_stations import MesoWestStation
 from diagnostics import init_diagnostics, diagnostics
 from spatial_model_utilities import great_circle_distance
@@ -59,7 +60,7 @@ def build_observation_data(stations, obs_type):
 def parse_datetime(s):
     gmt_tz = pytz.timezone('GMT')
     dt = datetime.strptime(s, "%Y/%m/%d  %H:%M:%S")
-    return dt.replace(tzinfo = gmt_tz)
+    return dt.replace(tzinfo=gmt_tz)
 
 
 
@@ -89,6 +90,7 @@ def run_module():
 
     # Assimilation parameters
     diagnostics().configure_tag("K1", False, False, True)
+    diagnostics().configure_tag("K1_mean", True, True, True)
     diagnostics().configure_tag("V1", False, False, True)
     diagnostics().configure_tag("assim_info", False, False, True)
 
@@ -204,8 +206,10 @@ def run_module():
     mresV = np.zeros_like(E)
     mid = np.zeros_like(E)
     Kg = np.zeros((dom_shape[0], dom_shape[1], len(Tk)+2))
-    f = np.zeros((dom_shape[0], dom_shape[1], Nk))
-    f_na = np.zeros((dom_shape[0], dom_shape[1], Nk))
+    cf = np.zeros((dom_shape[0], dom_shape[1], Nk+2))
+    cf_na = np.zeros((dom_shape[0], dom_shape[1], Nk+2))
+    f = np.zeros((dom_shape[0], dom_shape[1], Nk+2))
+    f_na = np.zeros((dom_shape[0], dom_shape[1], Nk+2))
 
     # preprocess all static covariates
     cov_ids = cfg['covariates']
@@ -232,6 +236,12 @@ def run_module():
     assim_time_win = cfg['assimilation_time_window']
 
     # construct model grid using standard fuel parameters
+    cmodels = np.zeros(dom_shape, dtype=np.object)
+    cmodels_na = np.zeros(dom_shape, dtype=np.object)
+    for i,j in np.ndindex(dom_shape):
+      cmodels[i,j] = CellMoistureModel((lat[i,j],lon[i,j]),Nk,E[i,j],Tk,P0)
+      cmodels_na[i,j] = CellMoistureModel((lat[i,j],lon[i,j]),Nk,E[i,j],Tk,P0)
+
     models = GridMoistureModel(E[:,:,np.newaxis][:,:,np.zeros((4,),dtype=np.int)], Tk, P0)
     models_na = GridMoistureModel(E[:,:,np.newaxis][:,:,np.zeros((4,),dtype=np.int)], Tk, P0)
 
@@ -253,19 +263,50 @@ def run_module():
         print("INFO: time: %s, step: %d" % (str(model_time), t))
 
         diagnostics().push("mt", model_time)
-
-        # run the model update
-        models.advance_model(Ed[t-1,:,:], Ew[t-1,:,:], rain[t-1,:,:], dt, Q)
-        models_na.advance_model(Ed[t-1,:,:], Ew[t-1,:,:], rain[t-1,:,:], dt, Q)
+        
+        # for i,j in np.ndindex(dom_shape):
+        #   cf[i,j,:] = cmodels[i,j].get_state()
+        #   cf_na[i,j,:] = cmodels_na[i,j].get_state()
 
         # extract fuel moisture contents
-        f[:,:,:] = models.get_state()[:,:,:Nk]
-        f_na[:,:,:] = models_na.get_state()[:,:,:Nk]
+        f[:,:,:] = models.get_state()
+        f_na[:,:,:] = models_na.get_state()
+
+        # print("PRE update    ASSIM:   Max difference in state: %.18e" % (np.amax(np.fabs(cf - f))))
+        # print("PRE update NO ASSIM:   Max difference in state: %.18e" % (np.amax(np.fabs(cf_na - f_na))))
+        # print("PRE update    ASSIM:   Max diff. in Jacobian: %.18e" % (np.amax([np.amax(np.fabs(cmodels[p].get_J() - models.J[p[0],p[1],:,:])) for p in np.ndindex(dom_shape)])))
+        # print("PRE update NO ASSIM:   Max diff. in Jacobian: %.18e" % (np.amax([np.amax(np.fabs(cmodels_na[p].get_J() - models_na.J[p[0],p[1],:,:])) for p in np.ndindex(dom_shape)])))
+        # print("PRE update    ASSIM:   Max diff. in Covariance: %.18e" % (np.amax([np.amax(np.fabs(cmodels[p].get_state_covar() - models.P[p[0],p[1],:,:])) for p in np.ndindex(dom_shape)])))
+        # print("PRE update NO ASSIM:   Max diff. in Covariance: %.18e" % (np.amax([np.amax(np.fabs(cmodels_na[p].get_state_covar() - models_na.P[p[0],p[1],:,:])) for p in np.ndindex(dom_shape)])))
+
+        # # run the model update
+        # for i,j in np.ndindex(dom_shape):
+        #   cmodels_na[i,j].advance_model(Ed[t-1,i,j], Ew[t-1,i,j], rain[t-1,i,j], dt, Q)
+        #   cmodels[i,j].advance_model(Ed[t-1,i,j], Ew[t-1,i,j], rain[t-1,i,j], dt, Q)
+        #   cf[i,j,:] = cmodels[i,j].get_state()
+        #   cf_na[i,j,:] = cmodels_na[i,j].get_state()
+
+        models_na.advance_model(Ed[t-1,:,:], Ew[t-1,:,:], rain[t-1,:,:], dt, Q)
+        models.advance_model(Ed[t-1,:,:], Ew[t-1,:,:], rain[t-1,:,:], dt, Q)
+
+        # extract fuel moisture contents
+        f[:,:,:] = models.get_state()
+        f_na[:,:,:] = models_na.get_state()
+
+        # print("POST update    ASSIM:  Max difference in state at %s" % str(np.unravel_index(np.argmax(np.fabs(cf - f)), cf.shape)))
+        
+        # print("POST update    ASSIM:  Max difference in state: %.18e" % (np.amax(np.fabs(cf - f))))
+        # print("POST update NO ASSIM:  Max difference in state: %.18e" % (np.amax(np.fabs(cf_na - f_na))))
+
+        # print("POST update    ASSIM:  Max diff. in Jacobian: %.18e" % (np.amax([np.amax(np.fabs(cmodels[p].get_J() - models.J[p[0],p[1],:,:])) for p in np.ndindex(dom_shape)])))
+        # print("POST update NO ASSIM:  Max diff. in Jacobian: %.18e" % (np.amax([np.amax(np.fabs(cmodels_na[p].get_J() - models_na.J[p[0],p[1],:,:])) for p in np.ndindex(dom_shape)])))
+        # print("POST update    ASSIM:  Max diff. in Covariance: %.18e" % (np.amax([np.amax(np.fabs(cmodels[p].get_state_covar() - models.P[p[0],p[1],:,:])) for p in np.ndindex(dom_shape)])))
+        # print("POST update NO ASSIM:  Max diff. in Covariance: %.18e" % (np.amax([np.amax(np.fabs(cmodels_na[p].get_state_covar() - models_na.P[p[0],p[1],:,:])) for p in np.ndindex(dom_shape)])))
 
         # push 10-hr fuel state & variance of forecast
-        diagnostics().push("fm10f", f[:,:,1])
-        diagnostics().push("fm10f_V1", models.P[:,:,1,1])
-        diagnostics().push("fm10na", f_na[:,:,1])
+        diagnostics().push("fm10f", f[:,:,1].copy())
+        diagnostics().push("fm10f_V1", models.P[:,:,1,1].copy())
+        diagnostics().push("fm10na", f_na[:,:,1].copy())
 
         # run Kriging on each observed fuel type
         Kfs, Vfs, fns = [], [], []
@@ -300,14 +341,18 @@ def run_module():
 
                 # find differences (residuals) between observed measurements and nearest grid points
                 obs_vals = [o.get_value() for o in obs_valid_now]
-                obs_ngp = [o.get_nearest_grid_point() for o in obs_valid_now]
+                obs_ngp  = [o.get_nearest_grid_point() for o in obs_valid_now]
                 diagnostics().push("obs_vals", obs_vals)
                 diagnostics().push("obs_ngp", obs_ngp)
 
-                mod_vals = np.array([f[ngp[0],ngp[1],fuel_ndx] for ngp in obs_ngp])
-                mod_na_vals = np.array([f_na[ngp[0],ngp[1],fuel_ndx] for ngp in obs_ngp])
+                mod_vals    = np.array([f[i,j,fuel_ndx] for i,j in obs_ngp])
+                mod_na_vals = np.array([f_na[i,j,fuel_ndx] for i,j  in obs_ngp])
+                cmod_vals    = np.array([cf[i,j,fuel_ndx] for i,j in obs_ngp])
+                cmod_na_vals = np.array([cf_na[i,j,fuel_ndx] for i,j  in obs_ngp])
                 diagnostics().push("fm10f_rmse", np.mean((obs_vals - mod_vals)**2)**0.5)
+                diagnostics().push("cfm10f_rmse", np.mean((obs_vals - cmod_vals)**2)**0.5)
                 diagnostics().push("fm10na_rmse", np.mean((obs_vals - mod_na_vals)**2)**0.5)
+                diagnostics().push("cfm10na_rmse", np.mean((obs_vals - cmod_na_vals)**2)**0.5)
 
                 # krige observations to grid points
                 Kf_fn, Vf_fn = trend_surface_model_kriging(obs_valid_now, X)
@@ -349,9 +394,17 @@ def run_module():
             else:
                 models.kalman_update(O, V, fns, Kg)
 
+            # for i,j in np.ndindex(dom_shape):
+            #     cmodels[i,j].kalman_update(O[i,j,:], V[i,j,:,:], fns)
+            #     cf[i,j,:] = cmodels[i,j].get_state()
+
             # push new diagnostic outputs
-            diagnostics().push("K1", (t, Kg[:,:,1]))
-            diagnostics().push("fm10a", models.get_state()[:,:,1])
+            diagnostics().push("K1", (t, Kg[:,:,1].copy()))
+            diagnostics().push("K1_mean", (t, np.mean(Kg[:,:,1])))
+            diagnostics().push("fm10a", models.get_state()[:,:,1].copy())
+
+            if np.any(models.get_state()[:,:,:Nk] < 0.0):
+              print("WARN: %d grid points have negative moisture!" % (np.count_nonzero(models.get_state()[:,:,1] < 0.0)))
 
         # store data in wrf_file variable FMC_G
         if fmc_gc is not None:
