@@ -88,19 +88,13 @@ def run_module():
     diagnostics().configure_tag("fm10_kriging_var", True, True, True)
 
     # Assimilation parameters
-    diagnostics().configure_tag("K1", False, False, True)
     diagnostics().configure_tag("K1_mean", True, True, True)
-    diagnostics().configure_tag("V1", False, False, True)
     diagnostics().configure_tag("assim_info", False, False, True)
 
     # Model forecast, analysis and non-assimilated model: state, covariance, errors
     diagnostics().configure_tag("fm10f_rmse", True, True, True)
     diagnostics().configure_tag("fm10na_rmse", True, True, True)
-    diagnostics().configure_tag("fm10f", False, True, True)
-    diagnostics().configure_tag("fm10f_V1", False, True, True)
-    diagnostics().configure_tag("fm10a", False, True, True)
-    diagnostics().configure_tag("fm10na", False, True, True)
-
+    
     # all simulation times and all assimilation times (subset)
     diagnostics().configure_tag("mta", False, True, True)
     diagnostics().configure_tag("mt", False, True, True)
@@ -122,23 +116,40 @@ def run_module():
     wrf_data = WRFModelData(cfg['wrf_output'],  ['T2', 'Q2', 'PSFC', 'RAINNC', 'RAINC', 'HGT'])
     wrf_data.slice_field('HGT')
 
-    # re-open the WRF file for writing FMC_G variables
-    wrf_file = netCDF4.Dataset(cfg['wrf_output'], 'a')
-    if 'FMC_GC' in wrf_file.variables:
-        fmc_gc = wrf_file.variables['FMC_GC']
-        print('INFO: FMC_GC variable found, will write output')
-    else:
-        fmc_gc = None
-        print('INFO: FMC_GC variable not in netCDF file, not writing output to file')
-
     # read in spatial and temporal extent of WRF variables
     lat, lon = wrf_data.get_lats(), wrf_data.get_lons()
     hgt = wrf_data['HGT']
     tm = wrf_data.get_gmt_times()
     Nt = cfg['Nt'] if cfg.has_key('Nt') and cfg['Nt'] is not None else len(tm)
     dom_shape = lat.shape
-
     print('INFO: domain size is %d x %d grid points.' % dom_shape)
+
+    # if writing is requested, open output file and set up dimensions 
+    if cfg['write_fields'] not in [ 'all', 'fmc_gc', 'none']:
+        error('FATAL: write_fields must be one of all, fmc_gc or none.')
+    if cfg['write_fields'] == 'none':
+      cfg['write_fields'] = False
+    out_file = None
+    ncfmc_gc, ncfm10a, ncfm10aV, ncfm10f, cnfm10fV, ncfm10na = None, None, None, None, None, None
+    nctsmV, ncKg = None, None
+    if cfg['write_fields']:
+        out_file = netCDF4.Dataset(cfg['output_dir'] + '/fields.nc', 'w')
+        out_file.createDimension('Time', None)
+        out_file.createDimension('fuel_moisture_classes_stag', 5)
+        out_file.createDimension('south_north', dom_shape[0])
+        out_file.createDimension('west_east', dom_shape[1])
+        ncfmc_gc = out_file.createVariable('FMC_GC', 'f4', ('Time', 'fuel_moisture_classes_stag', 'south_north', 'west_east'))
+        if cfg['write_fields'] == 'all':
+            ncfm10a = out_file.createVariable('fm10a', 'f4', ('Time', 'south_north', 'west_east'))
+            ncfm10aV = out_file.createVariable('fm10a_var', 'f4', ('Time', 'south_north', 'west_east'))
+            ncfm10na = out_file.createVariable('fm10na', 'f4', ('Time', 'south_north', 'west_east'))
+            ncfm10f = out_file.createVariable('fm10f', 'f4', ('Time', 'south_north', 'west_east'))
+            ncfm10fV = out_file.createVariable('fm10f_var', 'f4', ('Time', 'south_north', 'west_east'))
+            nctsmV = out_file.createVariable('tsm_var', 'f4', ('Time', 'south_north', 'west_east'))
+            ncKg = out_file.createVariable('kalman_gain', 'f4', ('Time', 'south_north', 'west_east'))
+            print('INFO: opened fields.nc for writing ALL output fields.')
+        else:
+            print('INFO: opened field.nc for writing FMC_GC only.')
 
     test_mode = (cfg['run_mode'] == 'test')
     tgt_station = None
@@ -277,9 +288,9 @@ def run_module():
         t_end-=1
 
     # the first FMC_GC value gets filled out with equilibria
-    if fmc_gc is not None:
+    if cfg['write_fields']:
         for i in range(Nk):
-            fmc_gc[0, i, :, :] = E
+            ncfmc_gc[0, i, :, :] = E
 
     print('INFO: running simulation from %s (%d) to %s (%d).' % (str(tm[t_start]), t_start, str(tm[t_end]), t_end))
     for t in range(t_start, t_end+1):
@@ -296,9 +307,10 @@ def run_module():
         f_na = models_na.get_state().copy()
 
         # push 10-hr fuel state & variance of forecast
-        diagnostics().push("fm10f", models.get_state()[:,:,1].copy())
-        diagnostics().push("fm10f_V1", models.P[:,:,1,1])
-        diagnostics().push("fm10na", models_na.get_state()[:,:,1].copy())
+        if cfg['write_fields'] == 'all':
+            ncfm10f[t,:,:] = models.get_state()[:,:,1]
+            ncfm10fV[t,:,:] = models.P[:,:,1,1]
+            ncfm10na[t,:,:] = models_na.get_state()[:,:,1]
 
         # run Kriging on each observed fuel type
         Kfs, Vfs, fns = [], [], []
@@ -356,8 +368,10 @@ def run_module():
 
                 krig_vals = np.array([Kf_fn[ngp] for ngp in obs_ngp])
                 diagnostics().push("assim_info", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
-                diagnostics().push("V1", Vf_fn)
                 diagnostics().push("fm10_kriging_var", (t, np.mean(Vf_fn)))
+
+                if cfg['write_fields'] == 'all':
+                    nctsmV[t,:,:] = Vf_fn
 
                 # append to storage for kriged fields in this time instant
                 Kfs.append(Kf_fn)
@@ -383,13 +397,16 @@ def run_module():
                 models.kalman_update(O, V, fns, Kg)
 
             # push new diagnostic outputs
-            diagnostics().push("K1", (t, Kg[:,:,1].copy()))
+            ncKg[t,:,:] = Kg[:,:,1]
             diagnostics().push("K1_mean", (t, np.mean(Kg[:,:,1])))
-            diagnostics().push("fm10a", models.get_state()[:,:,1].copy())
 
             if np.any(models.get_state()[:,:,:Nk] < 0.0):
                 print("WARN: %d grid points have negative moisture!" % (np.count_nonzero(models.get_state()[:,:,1] < 0.0)))
 
+        # store post-assimilation (or forecast depending on whether observations were available) FM-10 state and variance
+        if cfg['write_fields'] == 'all':
+            ncfm10a[t,:,:] = models.get_state()[:,:,1]
+            ncfm10aV[t,:,:] = models.P[:,:,1,1]
 
         # we don't care if we assimilated or not, we always check our error on target station if in test mode
         if test_mode:
@@ -406,15 +423,14 @@ def run_module():
 
 
         # store data in wrf_file variable FMC_G
-        if fmc_gc is not None:
-            for p in np.ndindex(dom_shape):
-                fmc_gc[t, :Nk, p[0], p[1]] = models[p].get_state()[:Nk]
+        if cfg['write_fields']:
+            ncfmc_gc[t,:Nk,:,:] = np.transpose(models.get_state()[:,:,:Nk],axes=[2,0,1])
 
     # store the diagnostics in a binary file when done
     diagnostics().dump_store(os.path.join(cfg['output_dir'], 'diagnostics.bin'))
 
     # close the netCDF file (relevant if we did write into FMC_GC)
-    wrf_file.close()
+    out_file.close()
 
 
 if __name__ == '__main__':
