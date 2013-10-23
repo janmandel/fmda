@@ -109,6 +109,8 @@ def run_module():
     diagnostics().configure_tag("obs_vals", False, True, True)
     diagnostics().configure_tag("obs_ngp", False, True, True)
 
+    # in test mode, we will emit observation errors at every assimilation step
+    diagnostics().configure_tag("test_obs_pred", True, True, True)
 
     ### Load and preprocess WRF model data
 
@@ -132,6 +134,18 @@ def run_module():
     Nt = cfg['Nt'] if cfg.has_key('Nt') and cfg['Nt'] is not None else len(tm)
     dom_shape = lat.shape
 
+    print('INFO: domain size is %d x %d grid points.' % dom_shape)
+
+    test_mode = (cfg['run_mode'] == 'test')
+    tgt_station = None
+    if cfg['run_mode'] == 'test':
+      print('INFO: running in TEST mode! Will perform leave-one-out tesing.')
+      tgt_station_id = cfg['target_station_id']
+    elif cfg['run_mode'] == 'production':
+      print('INFO: running in PRODUCTION mode! Using all observation stations.')
+    else:
+      error('FATAL: invalid run mode! Must be "test" or "production".')
+
     # determine simulation times
     tm_start = parse_datetime(cfg['start_time']) if cfg['start_time'] is not None else tm[0]
     tm_end = parse_datetime(cfg['end_time']) if cfg['end_time'] is not None else tm[-1]
@@ -145,18 +159,20 @@ def run_module():
     print('INFO: time limits are %s to %s\nINFO: simulation is from %s to %s' %
           (str(tm_start), str(tm_end), str(tm[0]), str(tm[-1])))
 
-    # retrieve the rain variables
-    rain = wrf_data['RAIN']
+    # retrieve dynamic covariates and remove mean at each time point for T2 and PSFC
     T2 = wrf_data['T2']
-    #T2 = 273.15 + 21.0 - wrf_data['T2']
+    T2 -= np.mean(np.mean(T2,axis=0),axis=0)[np.newaxis,np.newaxis,:]
+
     PSFC = wrf_data['PSFC']
+    PSFC -= np.mean(np.mean(PSFC,axis=0),axis=0)[np.newaxis,np.newaxis,:]
 
     # numerical fix - if it rains at an intensity of less than 0.001 per hour, set rain to zero
     # also, use log(rain + 1) to prevent wild trend surface model predictions when stations see little rain
     # but elsewhere there is too much rain
     # without this, numerical errors in trend surface model may pop up
-    #rain[rain < 0.001] = 0.0
-    #rain = np.log(rain + 1.0)
+    rain = wrf_data['RAIN']
+    #rain[rain < 0.01] = 0.0
+    rain = np.log(rain + 1.0)
 
     # moisture equilibria are now computed from averaged Q,P,T at beginning and end of period
     Ed, Ew = wrf_data.get_moisture_equilibria()
@@ -183,12 +199,24 @@ def run_module():
             print('Station %s: lat %g lon %g nearest grid pt %s lat %g lon %g dist_to_grid %g' %
                (code, mws.lat, mws.lon, str(mws.grid_pt), lat[mws.grid_pt], lon[mws.grid_pt], mws.dist_grid_pt))
             mws.load_station_data(os.path.join(cfg["station_data_dir"], "%s.obs" % code))
-            stations.append(mws)
+            if test_mode and mws.get_id() == tgt_station_id:
+                tgt_station = mws
+                print('INFO: in test mode, targeting station %s (removed from data pool).' % tgt_station_id)
+            else:
+                stations.append(mws)
 
     print('Loaded %d stations (discarded %d stations, too far from grid).' % (len(stations), len(si_list) - len(stations)))
 
+    if test_mode and tgt_station is None:
+      error('FATAL: in test mode, a station was removed that was not among accepted stations.')
+
     # build the observation data
     obs_data_fm10 = build_observation_data(stations, 'FM')
+
+    # build target data if in test mode
+    tgt_obs_fm10 = None
+    if test_mode:
+      tgt_obs_fm10 = build_observation_data([tgt_station], 'FM')
 
     ### Initialize model and visualization
 
@@ -211,7 +239,7 @@ def run_module():
     Xd3 = len(cov_ids) + 1
     X = np.zeros((dom_shape[0], dom_shape[1], Xd3))
     Xr = np.zeros((dom_shape[0], dom_shape[1], Xd3))
-    static_covar_map = { "lon" : lon, "lat" : lat, "elevation" : hgt, "constant" : np.ones(dom_shape) }
+    static_covar_map = { "lon" : lon - np.mean(lon), "lat" : lat - np.mean(lat), "elevation" : hgt - np.mean(hgt), "constant" : np.ones(dom_shape) }
     dynamic_covar_map = { "temperature" : T2, "pressure" : PSFC, "rain" : rain }
 
     for i in range(1, Xd3):
@@ -251,7 +279,6 @@ def run_module():
         print("INFO: time: %s, step: %d" % (str(model_time), t))
 
         diagnostics().push("mt", model_time)
-
 
         models_na.advance_model(Ed[t-1,:,:], Ew[t-1,:,:], rain[t-1,:,:], dt, Q)
         models.advance_model(Ed[t-1,:,:], Ew[t-1,:,:], rain[t-1,:,:], dt, Q)
@@ -311,13 +338,13 @@ def run_module():
                 Kf_fn, Vf_fn = trend_surface_model_kriging(obs_valid_now, X)
                 if np.count_nonzero(Kf_fn > 2.5) > 0:
                     rain_t = dynamic_covar_map['rain'][t,:,:]
-                    print('WARN: found %d values over 2.5, %d of those had rain' %
+                    print('WARN: found %d values over 2.5, %d of those had rain, clamped to 2.5' %
                             (np.count_nonzero(Kf_fn > 2.5),
                              np.count_nonzero(np.logical_and(Kf_fn > 2.5, rain_t > 0.0))))
-#                    Kf_fn[Kf_fn > 2.5] = 2.5
+                    Kf_fn[Kf_fn > 2.5] = 2.5
                 if np.count_nonzero(Kf_fn < 0.0) > 0:
-                    print('WARN: found %d values under 0.0' % np.count_nonzero(Kf_fn < 0.0))
-#                    Kf_fn[Kf_fn < 0.0] = 0.0
+                    print('WARN: found %d values under 0.0, clamped to 0.0' % np.count_nonzero(Kf_fn < 0.0))
+                    Kf_fn[Kf_fn < 0.0] = 0.0
 
                 krig_vals = np.array([Kf_fn[ngp] for ngp in obs_ngp])
                 diagnostics().push("assim_info", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
@@ -338,12 +365,12 @@ def run_module():
             V = np.zeros((dom_shape[0], dom_shape[1], NobsClasses, NobsClasses))
 
             for i in range(NobsClasses):
-              O[:,:,i] = Kfs[i]
-              V[:,:,i,i] = Vfs[i]
+                O[:,:,i] = Kfs[i]
+                V[:,:,i,i] = Vfs[i]
 
             # execute the Kalman update
             if len(fns) == 1:
-                models.kalman_update_single(O, V, fns[0], Kg)
+                models.kalman_update_single2(O, V, fns[0], Kg)
             else:
                 models.kalman_update(O, V, fns, Kg)
 
@@ -353,7 +380,20 @@ def run_module():
             diagnostics().push("fm10a", models.get_state()[:,:,1].copy())
 
             if np.any(models.get_state()[:,:,:Nk] < 0.0):
-              print("WARN: %d grid points have negative moisture!" % (np.count_nonzero(models.get_state()[:,:,1] < 0.0)))
+                print("WARN: %d grid points have negative moisture!" % (np.count_nonzero(models.get_state()[:,:,1] < 0.0)))
+
+
+        # we don't care if we assimilated or not, we always check our error on target station if in test mode
+        if test_mode:
+            valid_times = [z for z in tgt_obs_fm10.keys() if abs(total_seconds(z - model_time)) < assim_time_win/2.0]
+            if len(valid_times) > 0:
+              # this is our target observation [FIXME: this disregards multiple observations if multiple happen to be valid]
+              tgt_obs = tgt_obs_fm10[valid_times[0]][0]
+              tgt_i, tgt_j = tgt_obs.get_nearest_grid_point()
+              pred = f[tgt_i, tgt_j,1]
+              obs = tgt_obs.get_value()
+              diagnostics().push("test_obs_pred", (obs, pred))
+
 
         # store data in wrf_file variable FMC_G
         if fmc_gc is not None:
