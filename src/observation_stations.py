@@ -131,7 +131,7 @@ class Station:
     
     def get_position(self):
         """
-        Get geographical position of the observation station as a (lat, lon) tuple.
+        Get geographical position of the observation station as a (lon, lat) tuple.
         """
         return self.lon, self.lat
 

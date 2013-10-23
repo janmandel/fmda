@@ -106,7 +106,7 @@ def trend_surface_model_kriging(obs_data, X):
 
     # while the relative change
     while abs( (s2_eta_hat_old - s2_eta_hat) / max(s2_eta_hat_old, 1e-8)) > 1e-3:
-        print('TSM: iter %d s_eta_hat_old %g s2_eta_hat %g' % (iters, s2_eta_hat_old, s2_eta_hat))
+        #print('TSM: iter %d s_eta_hat_old %g s2_eta_hat %g' % (iters, s2_eta_hat_old, s2_eta_hat))
         s2_eta_hat_old = s2_eta_hat
 
         # recompute covariance matrix
