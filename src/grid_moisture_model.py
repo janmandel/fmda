@@ -271,6 +271,7 @@ class GridMoistureModel:
 
             #print(np.outer(K,P2[fuel_type,:]))
 
+            # NOTE: this update may produce matrices that are not symmetric positive definite
             P2 -= np.dot(K[:,np.newaxis], P2[fuel_type:fuel_type+1,:])
             P[i,j,:,:] = P2
 
@@ -279,4 +280,25 @@ class GridMoistureModel:
             if Kg is not None:
                 Kg[i,j,:] = K
 
+
+    def kalman_update_single2(self, O, V, fuel_type, Kg):
+
+        m_ext, P, H, P2 = self.m_ext, self.P, self.H, self.P2
+
+        # I is dom_shape
+        I = P[:,:,fuel_type,fuel_type] + V[:,:,0,0]
+        # K is dom_shape x dim
+        Kg[:,:,:] = P[:,:,:,fuel_type] / I[:,:,np.newaxis]
+
+        if np.any(np.logical_or(Kg[:,:,fuel_type] > 1.0, Kg[:,:,fuel_type] < 0.0)):
+            print("ERROR: some Kalman gains for 10-hr fuel are out of bounds.")
+
+        # m_ext is dom_shape x dim, O[:,:,0] and m_ext[:,:,fuel_type] are dom_shape
+        m_ext += Kg * (O - m_ext[:,:,fuel_type:fuel_type+1])
+
+        # try to do a tensor product here
+        # Kg[:,:,:,newaxis] is shape dom_shape x dim x 1
+        # P[:,:,fuel_type:fuel_type+1,:] is dom_shape x 1 x dim
+        for i,j in np.ndindex(P[:,:,0,0].shape):
+            P[i,j,:,:] -= np.dot(Kg[i,j,:,np.newaxis], P[i,j,fuel_type:fuel_type+1,:])
 
