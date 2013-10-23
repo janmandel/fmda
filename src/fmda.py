@@ -109,8 +109,12 @@ def run_module():
     diagnostics().configure_tag("obs_vals", False, True, True)
     diagnostics().configure_tag("obs_ngp", False, True, True)
 
-    # in test mode, we will emit observation errors at every assimilation step
-    diagnostics().configure_tag("test_obs_pred", True, True, True)
+    # in test mode, we will emit observations at the target station
+    # our predictions, the nearest grid point and the test station id
+    diagnostics().configure_tag("test_obs", True, True, True)
+    diagnostics().configure_tag("test_pred", True, True, True)
+    diagnostics().configure_tag("test_ngp", True, True, True)
+    diagnostics().configure_tag("test_station_id", True, True, True)
 
     ### Load and preprocess WRF model data
 
@@ -141,6 +145,7 @@ def run_module():
     if cfg['run_mode'] == 'test':
       print('INFO: running in TEST mode! Will perform leave-one-out tesing.')
       tgt_station_id = cfg['target_station_id']
+      diagnostics().push('test_station_id', tgt_station_id)
     elif cfg['run_mode'] == 'production':
       print('INFO: running in PRODUCTION mode! Using all observation stations.')
     else:
@@ -202,6 +207,7 @@ def run_module():
             if test_mode and mws.get_id() == tgt_station_id:
                 tgt_station = mws
                 print('INFO: in test mode, targeting station %s (removed from data pool).' % tgt_station_id)
+                diagnostics().push("test_ngp", mws.get_nearest_grid_point())
             else:
                 stations.append(mws)
 
@@ -215,7 +221,9 @@ def run_module():
 
     # build target data if in test mode
     tgt_obs_fm10 = None
+    test_ngp = None
     if test_mode:
+      test_ngp = tgt_station.get_nearest_grid_point()
       tgt_obs_fm10 = build_observation_data([tgt_station], 'FM')
 
     ### Initialize model and visualization
@@ -386,13 +394,15 @@ def run_module():
         # we don't care if we assimilated or not, we always check our error on target station if in test mode
         if test_mode:
             valid_times = [z for z in tgt_obs_fm10.keys() if abs(total_seconds(z - model_time)) < assim_time_win/2.0]
+            tgt_i, tgt_j = test_ngp
+            diagnostics().push("test_pred", f[tgt_i, tgt_j,1])
             if len(valid_times) > 0:
               # this is our target observation [FIXME: this disregards multiple observations if multiple happen to be valid]
               tgt_obs = tgt_obs_fm10[valid_times[0]][0]
-              tgt_i, tgt_j = tgt_obs.get_nearest_grid_point()
-              pred = f[tgt_i, tgt_j,1]
               obs = tgt_obs.get_value()
-              diagnostics().push("test_obs_pred", (obs, pred))
+              diagnostics().push("test_obs", obs)
+            else:
+              diagnostics().push("test_obs", np.nan)
 
 
         # store data in wrf_file variable FMC_G
