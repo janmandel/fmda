@@ -397,7 +397,8 @@ def run_module():
                 models.kalman_update(O, V, fns, Kg)
 
             # push new diagnostic outputs
-            ncKg[t,:,:] = Kg[:,:,1]
+            if cfg['write_fields'] == 'all':
+                ncKg[t,:,:] = Kg[:,:,1]
             diagnostics().push("K1_mean", (t, np.mean(Kg[:,:,1])))
 
             if np.any(models.get_state()[:,:,:Nk] < 0.0):
