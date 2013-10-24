@@ -402,7 +402,7 @@ def run_module():
             diagnostics().push("K1_mean", (t, np.mean(Kg[:,:,1])))
 
             if np.any(models.get_state()[:,:,:Nk] < 0.0):
-                print("WARN: %d grid points have negative moisture!" % (np.count_nonzero(models.get_state()[:,:,1] < 0.0)))
+                print("WARN: %d negative moisture values found!" % (np.count_nonzero(models.get_state()[:,:,:] < 0.0)))
 
         # store post-assimilation (or forecast depending on whether observations were available) FM-10 state and variance
         if cfg['write_fields'] == 'all':
