@@ -431,7 +431,8 @@ def run_module():
     diagnostics().dump_store(os.path.join(cfg['output_dir'], 'diagnostics.bin'))
 
     # close the netCDF file (relevant if we did write into FMC_GC)
-    out_file.close()
+    if out_file is not None:
+        out_file.close()
 
 
 if __name__ == '__main__':
