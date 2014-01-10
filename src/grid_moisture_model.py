@@ -2,6 +2,10 @@ import numpy as np
 
 
 class GridMoistureModel:
+    """
+    This is a pure-python implementation of individual moisture models
+    running on a grid.
+    """
     Tk = np.array([1.0, 10.0, 100.0, 1000.0]) * 3600    # nominal fuel delays
     r0 = 0.05                                           # threshold rainfall [mm/h]
     rk = 8.0                                            # saturation rain intensity [mm/h]
@@ -205,7 +209,7 @@ class GridMoistureModel:
         m_ext, P, H, P2 = self.m_ext, self.P, self.H, self.P2
         H[:] = 0.0
 
-        # construct an observation operator tailored to observed fuel types 
+        # construct an observation operator tailored to observed fuel types
         for i in fuel_types:
             H[i, i] = 1.0
         Ho = H[fuel_types, :]

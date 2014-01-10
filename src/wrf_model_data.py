@@ -9,21 +9,21 @@ import numpy as np
 
 class WRFModelData:
     """
-    This class contains aggregate information loaded from a WRF model, methods for loading data from a WRF simulation
-    are provided.
+    This class contains aggregate information loaded from a WRF model, methods for
+    loading data from a WRF simulation are provided.
     """
-    
+
     def __init__(self, file_name, fields = None):
         """
         Load data from a file file_name. See load_wrf_data for standard fields that
         are loaded.  The fields can be overridden by passing a new list in the fields
         argument.  The model simulation times can be moved into a different time zone
         by passing in a time zone descriptor in tz_name (must be recognizable for pytz).
-        If no time zone is given, the get_times() function assumes GMT is local time. 
+        If no time zone is given, the get_times() function assumes GMT is local time.
         """
         self.file_name = file_name
         self.load_data(file_name, fields)
-    
+
 
     def load_data(self, data_file, var_names):
         """
@@ -32,20 +32,20 @@ class WRFModelData:
         variables: 'T2', 'Q2', 'PSFC', 'RAINC', 'RAINNC'.  The fields
         'Times', 'XLAT', 'XLONG' are always loaded.
         """
-        
+
         # replace empty array by default
         if var_names is None:
             var_names = ['T2', 'Q2', 'PSFC', 'RAINNC', 'RAINC']
-            
+
         self.fields = {}
-        
+
         d = netCDF4.Dataset(data_file)
         for vname in var_names:
             self.fields[vname] = d.variables[vname][:,...]
-            
+
         self.fields['lat'] = d.variables['XLAT'][0,:,:]
         self.fields['lon'] = d.variables['XLONG'][0,:,:]
-            
+
         # time is always loaded and encoded as a list of python datetime objects
         gmt_tz = pytz.timezone('GMT')
         tm = d.variables['Times'][:,...]
@@ -54,9 +54,9 @@ class WRFModelData:
             dt = datetime.strptime(''.join(t), '%Y-%m-%d_%H:%M:%S')
             dt = dt.replace(tzinfo = gmt_tz)
             tp.append(dt)
-            
+
         self.fields['GMT'] = tp
- 
+
         d.close()
 
         # if we have all the rain variables, compute the rainfall in each window
@@ -65,7 +65,7 @@ class WRFModelData:
             # remove the fields to reduce memory consumption
             del self.fields['RAINNC']
             del self.fields['RAINC']
-        
+
         # precompute the equilibrium fields needed everywhere
         self.equilibrium_moisture()
 
@@ -131,7 +131,7 @@ class WRFModelData:
     def get_domain_extent(self):
         """
         Return smallest enclosing aligned rectangle of domain.
-        return is a tuple (min(lon), min(lat), max(lon), max(lat)). 
+        return is a tuple (min(lon), min(lat), max(lon), max(lat)).
         """
         lat = self['lat']
         lon = self['lon']
@@ -154,14 +154,14 @@ class WRFModelData:
         # load the standard fields
         P = self['PSFC']
         Q = self['Q2']
-        T = self['T2'] 
+        T = self['T2']
 
         Pi = 0.5 * (P[:-1,:,:] + P[1:,:,:])
         Qi = 0.5 * (Q[:-1,:,:] + Q[1:,:,:])
         Ti = 0.5 * (T[:-1,:,:] + T[1:,:,:])
 
         # saturated vapor pressure (at each location, size n x 1)
-        Pws = np.exp(54.842763 - 6763.22/Ti - 4.210 * np.log(Ti) + 0.000367*Ti + np.tanh(0.0415*(Ti - 218.8)) 
+        Pws = np.exp(54.842763 - 6763.22/Ti - 4.210 * np.log(Ti) + 0.000367*Ti + np.tanh(0.0415*(Ti - 218.8))
             * (53.878 - 1331.22/Ti - 9.44523 * np.log(Ti) + 0.014025*Ti))
 
         # water vapor pressure (at each location, size n x 1)

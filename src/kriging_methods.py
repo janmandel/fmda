@@ -36,7 +36,7 @@ def numerical_solve_bisect(e2, eps2, k):
       val_right = np.sum(e2 / (eps2 + s2_eta_right))
 
 #    print('BISECT: s2_eta_left %g val_left %g s2_eta_right %g val_right %g tgt %g' %
-#           (s2_eta_left, val_left, s2_eta_right, val_right, tgt)) 
+#           (s2_eta_left, val_left, s2_eta_right, val_right, tgt))
 
     while val_left - val_right > 1e-6:
         s2_eta_new = 0.5 * (s2_eta_left + s2_eta_right)
@@ -104,7 +104,7 @@ def trend_surface_model_kriging(obs_data, X):
     iters = 0
     subzeros = 0
 
-    # while the relative change
+    # while the relative change is more than 0.1%
     while abs( (s2_eta_hat_old - s2_eta_hat) / max(s2_eta_hat_old, 1e-8)) > 1e-3:
         #print('TSM: iter %d s_eta_hat_old %g s2_eta_hat %g' % (iters, s2_eta_hat_old, s2_eta_hat))
         s2_eta_hat_old = s2_eta_hat
@@ -140,7 +140,7 @@ def trend_surface_model_kriging(obs_data, X):
         subzeros = np.count_nonzero(s2_array < 0.0)
         iters += 1
 
-    # map computed betas to original (possibly extended) betas which include zero variables
+    # map computed betas to original (possibly extended) betas which include unused variables
     beta_ext = np.asmatrix(np.zeros((Nallcov,1)))
     beta_ext[nz_covs] = beta
     diagnostics().push("s2_eta_hat", s2_eta_hat)
