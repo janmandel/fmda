@@ -451,4 +451,5 @@ if __name__ == '__main__':
         sys.exit(1)
 
     run_module()
+    sys.exit(0)
 
