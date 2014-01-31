@@ -178,10 +178,10 @@ def run_module():
 
     # retrieve dynamic covariates and remove mean at each time point for T2 and PSFC
     T2 = wrf_data['T2']
-    T2 -= np.mean(np.mean(T2,axis=0),axis=0)[np.newaxis,np.newaxis,:]
+    #T2 -= np.mean(np.mean(T2,axis=0),axis=0)[np.newaxis,np.newaxis,:]
 
     PSFC = wrf_data['PSFC']
-    PSFC -= np.mean(np.mean(PSFC,axis=0),axis=0)[np.newaxis,np.newaxis,:]
+    #PSFC -= np.mean(np.mean(PSFC,axis=0),axis=0)[np.newaxis,np.newaxis,:]
 
     # numerical fix - if it rains at an intensity of less than 0.001 per hour, set rain to zero
     # also, use log(rain + 1) to prevent wild trend surface model predictions when stations see little rain
