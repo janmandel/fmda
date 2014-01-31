@@ -123,6 +123,7 @@ def run_module():
     Nt = cfg['Nt'] if cfg.has_key('Nt') and cfg['Nt'] is not None else len(tm)
     dom_shape = lat.shape
     print('INFO: domain size is %d x %d grid points.' % dom_shape)
+    print('INFO: domain extent is lats (%g to %g) lons (%g to %g).' % (np.amin(lat),np.amax(lat),np.amin(lon),np.amax(lon)))
 
     # if writing is requested, open output file and set up dimensions 
     if cfg['write_fields'] not in [ 'all', 'fmc_gc', 'none']:

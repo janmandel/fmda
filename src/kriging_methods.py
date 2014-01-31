@@ -3,6 +3,7 @@ from diagnostics import diagnostics
 import numpy as np
 
 
+
 def numerical_solve_bisect(e2, eps2, k):
     """
     Solve the estimator equation using bisection.
@@ -103,42 +104,61 @@ def trend_surface_model_kriging(obs_data, X):
     s2_eta_hat = 0.0
     iters = 0
     subzeros = 0
+    res2 = None
+    XtSX = None
+    equal_variance_flag = np.all(obs_var == obs_var[0])
 
-    # while the relative change is more than 0.1%
-    while abs( (s2_eta_hat_old - s2_eta_hat) / max(s2_eta_hat_old, 1e-8)) > 1e-3:
-        #print('TSM: iter %d s_eta_hat_old %g s2_eta_hat %g' % (iters, s2_eta_hat_old, s2_eta_hat))
-        s2_eta_hat_old = s2_eta_hat
+    if equal_variance_flag:
+      # use a much faster algorithm that requires no iterations
+      Q, R = np.linalg.qr(Xobs)
+      beta = np.linalg.solve(R, np.asmatrix(Q).T * y)
+      res2 = np.asarray(y - Xobs * beta)[:,0]**2
+      gamma2 = obs_var[0]
+      if Nobs > Ncov:
+        s2_eta_hat = max(1.0 / (Nobs - Ncov) * np.sum(res2) - gamma2, 0.0)
+      else:
+        s2_eta_hat = 0.0
+      XtSX = 1.0 / (s2_eta_hat + gamma2) * (Xobs.T* Xobs)
+      iters = -1
+      subzeros = 0
 
-        # recompute covariance matrix
-        Sigma_diag = obs_var + s2_eta_hat
-        Sigma = np.diag(Sigma_diag)
-        Sigma_1 = np.diag(1.0 / Sigma_diag)
-        XtSX = Xobs.T * Sigma_1 * Xobs
-        #print('TSM: XtSX = %s' % str(XtSX))
+    else:
 
-        # QR solution method of the least squares problem
-        Sigma_1_2 = np.asmatrix(np.diag(Sigma_diag ** -0.5))
-        yt = Sigma_1_2 * y
-        Q, R = np.linalg.qr(Sigma_1_2 * Xobs)
-        beta = np.linalg.solve(R, np.asmatrix(Q).T * yt)
-        res2 = np.asarray(y - Xobs * beta)[:,0]**2
-#        print('TSM: beta %s res2 %s' % (str(beta), str(res2)))
+      # while the relative change is more than 0.1%
+      while abs( (s2_eta_hat_old - s2_eta_hat) / max(s2_eta_hat_old, 1e-8)) > 1e-3:
+          #print('TSM: iter %d s_eta_hat_old %g s2_eta_hat %g' % (iters, s2_eta_hat_old, s2_eta_hat))
+          s2_eta_hat_old = s2_eta_hat
 
-        # compute new estimate of variance of microscale variability
-        s2_array = res2 - obs_var
-        for i in range(len(s2_array)):
-            s2_array[i] += np.dot(Xobs[i,:], np.linalg.solve(XtSX, Xobs[i,:].T))
+          # recompute covariance matrix
+          Sigma_diag = obs_var + s2_eta_hat
+          Sigma = np.diag(Sigma_diag)
+          Sigma_1 = np.diag(1.0 / Sigma_diag)
+          XtSX = Xobs.T * Sigma_1 * Xobs
+          #print('TSM: XtSX = %s' % str(XtSX))
 
-#        print('TSM: s2_array %s' % str(s2_array))
-        s2_eta_hat = numerical_solve_bisect(res2, obs_var, Ncov)
-        if s2_eta_hat < 0.0:
-#          print("TSM: s2_eta_hat estimate below zero")
-          s2_eta_hat = 0.0
+          # QR solution method of the least squares problem
+          Sigma_1_2 = np.asmatrix(np.diag(Sigma_diag ** -0.5))
+          yt = Sigma_1_2 * y
+          Q, R = np.linalg.qr(Sigma_1_2 * Xobs)
+          beta = np.linalg.solve(R, np.asmatrix(Q).T * yt)
+          res2 = np.asarray(y - Xobs * beta)[:,0]**2
+  #        print('TSM: beta %s res2 %s' % (str(beta), str(res2)))
 
-#        print('TSM: s2_eta_hat %g' % s2_eta_hat)
+          # compute new estimate of variance of microscale variability
+          s2_array = res2 - obs_var
+          for i in range(len(s2_array)):
+              s2_array[i] += np.dot(Xobs[i,:], np.linalg.solve(XtSX, Xobs[i,:].T))
 
-        subzeros = np.count_nonzero(s2_array < 0.0)
-        iters += 1
+  #        print('TSM: s2_array %s' % str(s2_array))
+          s2_eta_hat = numerical_solve_bisect(res2, obs_var, Ncov)
+          if s2_eta_hat < 0.0:
+  #          print("TSM: s2_eta_hat estimate below zero")
+            s2_eta_hat = 0.0
+
+  #        print('TSM: s2_eta_hat %g' % s2_eta_hat)
+
+          subzeros = np.count_nonzero(s2_array < 0.0)
+          iters += 1
 
     # map computed betas to original (possibly extended) betas which include unused variables
     beta_ext = np.asmatrix(np.zeros((Nallcov,1)))
@@ -148,7 +168,7 @@ def trend_surface_model_kriging(obs_data, X):
     diagnostics().push("kriging_iters", iters)
     diagnostics().push("kriging_rmse", np.mean(res2)**0.5)
     diagnostics().push("kriging_subzero_s2_estimates", subzeros)
-    diagnostics().push("kriging_cov_cond", np.linalg.cond(XtSX))
+#    diagnostics().push("kriging_cov_cond", np.linalg.cond(XtSX))
 
     for i in range(X.shape[0]):
         for j in range(X.shape[1]):
