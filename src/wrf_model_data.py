@@ -4,7 +4,7 @@ import netCDF4
 import pytz
 from datetime import datetime, timedelta
 import numpy as np
-
+import sys
 
 
 class WRFModelData:
@@ -156,9 +156,17 @@ class WRFModelData:
         Q = self['Q2']
         T = self['T2']
 
-        Pi = 0.5 * (P[:-1,:,:] + P[1:,:,:])
-        Qi = 0.5 * (Q[:-1,:,:] + Q[1:,:,:])
-        Ti = 0.5 * (T[:-1,:,:] + T[1:,:,:])
+        self.check_variable(P, 'pressure', 1000, 100000)
+        self.check_variable(T, 'temperature', 200, 330)
+        self.check_variable(Q, 'water/vapor ratio', 1e-8, 0.5)
+
+        Pi = np.copy(P)
+        Ti = np.copy(T)
+        Qi = np.copy(Q)
+
+        Pi[1:,:,:] = 0.5 * (P[:-1,:,:] + P[1:,:,:])
+        Qi[1:,:,:] = 0.5 * (Q[:-1,:,:] + Q[1:,:,:])
+        Ti[1:,:,:] = 0.5 * (T[:-1,:,:] + T[1:,:,:])
 
         # saturated vapor pressure (at each location, size n x 1)
         Pws = np.exp(54.842763 - 6763.22/Ti - 4.210 * np.log(Ti) + 0.000367*Ti + np.tanh(0.0415*(Ti - 218.8))
@@ -168,17 +176,27 @@ class WRFModelData:
         Pw = Pi * Qi / (0.622 + (1 - 0.622) * Qi)
 
         # relative humidity (percent, at each location, size n x 1)
-        H = 100 * Pw / Pws;
+        H = 100 * Pw / Pws
+        self.check_variable(H, 'relative humidity', 0., 100.)
+        mxpos = np.unravel_index(np.argmax(H),H.shape)
+        print('DIAG: maximum humidity is at %g,%g at time %s.' % (self['lat'][mxpos[1],mxpos[2]],self['lon'][mxpos[1],mxpos[2]], self['GMT'][mxpos[0]]))
+
+        H = np.minimum(H, 100.)
 
         # drying/wetting fuel equilibrium moisture contents (location specific,
         # n x 1)
-        Ed = np.zeros_like(P)
-        Ew = np.zeros_like(P)
-        Ed[1:,:,:] = 0.924*H**0.679 + 0.000499*np.exp(0.1*H) + 0.18*(21.1 + 273.15 - Ti)*(1 - np.exp(-0.115*H))
-        Ew[1:,:,:] = 0.618*H**0.753 + 0.000454*np.exp(0.1*H) + 0.18*(21.1 + 273.15 - Ti)*(1 - np.exp(-0.115*H))
+        d = 0.924*H**0.679 + 0.000499*np.exp(0.1*H) + 0.18*(21.1 + 273.15 - Ti)*(1 - np.exp(-0.115*H))
+        w = 0.618*H**0.753 + 0.000454*np.exp(0.1*H) + 0.18*(21.1 + 273.15 - Ti)*(1 - np.exp(-0.115*H))
 
-        Ed *= 0.01
-        Ew *= 0.01
+        d *= 0.01
+        w *= 0.01
+
+        # this is here to _ensure_ that drying equilibrium is always higher than (or equal to) wetting equilibrium
+        Ed = np.maximum(d, w)
+        Ew = np.minimum(d, w)
+
+        self.check_variable(Ed, 'drying equilibrium', 0.0, 2.5)
+        self.check_variable(Ew, 'wetting equilibrium', 0.0, 2.5)
 
         self.fields['Ed'] = Ed
         self.fields['Ew'] = Ew
@@ -189,4 +207,17 @@ class WRFModelData:
         Return the drying and wetting equilibrium.
         """
         return self['Ed'], self['Ew']
+
+
+    def check_variable(self,V,name,mn,mx):
+        """
+        Check if the variable V is outside the range [mn,mx].
+        """
+        if np.any(V < mn):
+            pos = np.unravel_index(np.argmin(V), V.shape)
+            print("ERROR: found %s less than %g, min is %g at position %d,%d!" % (name,mn,V[pos],pos[0],pos[1]))
+
+        if np.any(V > mx):
+            pos = np.unravel_index(np.argmax(V), V.shape)
+            print("ERROR: found %s higher than %g, max is %g at position %d,%d!" % (name,mx,V[pos],pos[0],pos[1]))
 

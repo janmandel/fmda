@@ -235,7 +235,7 @@ class MesoWestStation(Station):
                 if len(tm_str) == 0:
                     break
 
-                tstamp = gmt_tz.localize(datetime.strptime(tm_str, '%Y-%m-%d_%H:%M %Z'))
+                tstamp = gmt_tz.localize(datetime.strptime(tm_str, '%Y-%m-%d_%H:%M:%S %Z'))
 
                 # read in the variable names
                 var_str = map(string.strip, readline_skip_comments(f).split(","))

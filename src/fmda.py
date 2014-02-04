@@ -87,8 +87,16 @@ def run_module():
     diagnostics().configure_tag("kriging_subzero_s2_estimates", False, True, True)
     diagnostics().configure_tag("fm10_kriging_var", True, True, True)
 
+    diagnostics().configure_tag("f0_summary", True, True, True)
+    diagnostics().configure_tag("f1_summary", True, True, True)
+    diagnostics().configure_tag("f2_summary", True, True, True)
+    diagnostics().configure_tag("f3_summary", True, True, True)
+
     # Assimilation parameters
-    diagnostics().configure_tag("K1_mean", True, True, True)
+    diagnostics().configure_tag("K0_summary", True, True, True)
+    diagnostics().configure_tag("K1_summary", True, True, True)
+    diagnostics().configure_tag("K2_summary", True, True, True)
+    diagnostics().configure_tag("K3_summary", True, True, True)
     diagnostics().configure_tag("assim_info", False, False, True)
 
     # Model forecast, analysis and non-assimilated model: state, covariance, errors
@@ -240,8 +248,8 @@ def run_module():
 
     ### Initialize model and visualization
 
-    # construct initial conditions from timestep 1 (because Ed/Ew at zero are zero)
-    E = 0.5 * (Ed[1,:,:] + Ew[1,:,:])
+    # construct initial conditions from timestep 0
+    E = 0.5 * (Ed[0,:,:] + Ew[0,:,:])
 
     # set up parameters
     Nk = 4  # we simulate 4 types of fuel
@@ -278,6 +286,8 @@ def run_module():
     # retrieve assimilation time window
     assim_time_win = cfg['assimilation_time_window']
 
+    print('GMM init: equilibrium (%g,%g,%g) and at 86,205 %g' % (np.amin(E),np.mean(E),np.amax(E),E[86,205]))
+
     models = GridMoistureModel(E[:,:,np.newaxis][:,:,np.zeros((4,),dtype=np.int)], Tk, P0)
     models_na = GridMoistureModel(E[:,:,np.newaxis][:,:,np.zeros((4,),dtype=np.int)], Tk, P0)
 
@@ -313,122 +323,147 @@ def run_module():
             ncfm10fV[t,:,:] = models.P[:,:,1,1]
             ncfm10na[t,:,:] = models_na.get_state()[:,:,1]
 
-        # run Kriging on each observed fuel type
-        Kfs, Vfs, fns = [], [], []
-        for obs_data, fuel_ndx in [ (obs_data_fm10, 1) ]:
 
-            # run the kriging subsystem and the Kalman update only if have valid observations
-            valid_times = [z for z in obs_data.keys() if abs(total_seconds(z - model_time)) < assim_time_win/2.0]
-            print('INFO: there are %d valid times at model time %s for fuel index %d' % (len(valid_times), str(model_time), fuel_ndx))
-            if len(valid_times) > 0:
+        # examine the assimilated fields (if assimilation is activated)
+        for i in range(4):
+            diagnostics().push("f%d_summary" % i, (t, np.amin(f[:,:,i]), np.mean(f[:,:,i]), np.amax(f[:,:,i])))
+            if np.any(f[:,:,i] < 0.0):
+                print("WARN: in field %d there were %d negative moisture values !" % (i, np.count_nonzero(f[:,:,i] < 0.0)))
+                ind = np.unravel_index(np.argmin(f[:,:,i]), f.shape[:2])
+                print(models.P[ind[0],ind[1],:,:])
+                print("Full model state at position %d,%d:" % (ind[0],ind[1]))
+                print(models.m_ext[ind[0],ind[1],:])
+            if np.any(f[:,:,i] > 2.5):
+                print("WARN: in field %d there were %d moisture values above 2.5!" % (i, np.count_nonzero(f[:,:,i] > 2.5)))
+                ind = np.unravel_index(np.argmax(f[:,:,i]), f.shape[:2])
+                print(models.P[ind[0],ind[1],:,:])
+                print("Full model state at position %d,%d:" % (ind[0],ind[1]))
+                print(models.m_ext[ind[0],ind[1],:])
 
-                # add model time as time when assimilation occurred
-                diagnostics().push("mta", model_time)
+        if cfg['assimilate']:
 
-                # retrieve observations for current time
-                obs_valid_now = []
-                for z in valid_times:
-                    obs_valid_now.extend(obs_data[z])
+            # run Kriging on each observed fuel type
+            Kfs, Vfs, fns = [], [], []
+            for obs_data, fuel_ndx in [ (obs_data_fm10, 1) ]:
 
-                print('INFO: model time %s, assimilating %d observations.' % (str(model_time), len(obs_valid_now)))
+                # run the kriging subsystem and the Kalman update only if have valid observations
+                valid_times = [z for z in obs_data.keys() if abs(total_seconds(z - model_time)) < assim_time_win/2.0]
+                print('INFO: there are %d valid times at model time %s for fuel index %d' % (len(valid_times), str(model_time), fuel_ndx))
+                if len(valid_times) > 0:
 
-                # construct covariates for this time instant
-                X[:,:,0] = f[:,:,fuel_ndx]
-                for i in range(1, Xd3):
-                  cov_id = cov_ids[i-1]
-                  if cov_id in static_covar_map:
-                    X[:, :, i] = Xr[:, :, i]
-                  elif cov_id in dynamic_covar_map:
-                    F = dynamic_covar_map[cov_id]
-                    X[:, :, i] = F[t, :, :]
-                  else:
-                    error('FATAL: found unknown covariate %s' % cov_id)
+                    # add model time as time when assimilation occurred
+                    diagnostics().push("mta", model_time)
 
-                # find differences (residuals) between observed measurements and nearest grid points
-                obs_vals = [o.get_value() for o in obs_valid_now]
-                obs_ngp  = [o.get_nearest_grid_point() for o in obs_valid_now]
-                diagnostics().push("obs_vals", obs_vals)
-                diagnostics().push("obs_ngp", obs_ngp)
+                    # retrieve observations for current time
+                    obs_valid_now = []
+                    for z in valid_times:
+                        obs_valid_now.extend(obs_data[z])
 
-                mod_vals    = np.array([f[i,j,fuel_ndx] for i,j in obs_ngp])
-                mod_na_vals = np.array([f_na[i,j,fuel_ndx] for i,j  in obs_ngp])
-                diagnostics().push("fm10f_rmse", np.mean((obs_vals - mod_vals)**2)**0.5)
-                diagnostics().push("fm10na_rmse", np.mean((obs_vals - mod_na_vals)**2)**0.5)
+                    print('INFO: model time %s, assimilating %d observations.' % (str(model_time), len(obs_valid_now)))
 
-                # krige observations to grid points
-                Kf_fn, Vf_fn = trend_surface_model_kriging(obs_valid_now, X)
-                if np.count_nonzero(Kf_fn > 2.5) > 0:
-                    rain_t = dynamic_covar_map['rain'][t,:,:]
-                    print('WARN: found %d values over 2.5, %d of those had rain, clamped to 2.5' %
-                            (np.count_nonzero(Kf_fn > 2.5),
-                             np.count_nonzero(np.logical_and(Kf_fn > 2.5, rain_t > 0.0))))
-                    Kf_fn[Kf_fn > 2.5] = 2.5
-                if np.count_nonzero(Kf_fn < 0.0) > 0:
-                    print('WARN: found %d values under 0.0, clamped to 0.0' % np.count_nonzero(Kf_fn < 0.0))
-                    Kf_fn[Kf_fn < 0.0] = 0.0
+                    # construct covariates for this time instant
+                    X[:,:,0] = f[:,:,fuel_ndx]
+                    for i in range(1, Xd3):
+                      cov_id = cov_ids[i-1]
+                      if cov_id in static_covar_map:
+                        X[:, :, i] = Xr[:, :, i]
+                      elif cov_id in dynamic_covar_map:
+                        F = dynamic_covar_map[cov_id]
+                        X[:, :, i] = F[t, :, :]
+                      else:
+                        error('FATAL: found unknown covariate %s' % cov_id)
 
-                krig_vals = np.array([Kf_fn[ngp] for ngp in obs_ngp])
-                diagnostics().push("assim_info", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
-                diagnostics().push("fm10_kriging_var", (t, np.mean(Vf_fn)))
+                    # find differences (residuals) between observed measurements and nearest grid points
+                    obs_vals = [o.get_value() for o in obs_valid_now]
+                    obs_ngp  = [o.get_nearest_grid_point() for o in obs_valid_now]
+                    diagnostics().push("obs_vals", obs_vals)
+                    diagnostics().push("obs_ngp", obs_ngp)
 
+                    mod_vals    = np.array([f[i,j,fuel_ndx] for i,j in obs_ngp])
+                    mod_na_vals = np.array([f_na[i,j,fuel_ndx] for i,j  in obs_ngp])
+                    diagnostics().push("fm10f_rmse", np.mean((obs_vals - mod_vals)**2)**0.5)
+                    diagnostics().push("fm10na_rmse", np.mean((obs_vals - mod_na_vals)**2)**0.5)
+
+                    # krige observations to grid points
+                    Kf_fn, Vf_fn = trend_surface_model_kriging(obs_valid_now, X)
+                    if np.count_nonzero(Kf_fn > 2.5) > 0:
+                        rain_t = dynamic_covar_map['rain'][t,:,:]
+                        print('WARN: in TSM found %d values over 2.5, %d of those had rain, clamped to 2.5' %
+                                (np.count_nonzero(Kf_fn > 2.5),
+                                 np.count_nonzero(np.logical_and(Kf_fn > 2.5, rain_t > 0.0))))
+                        Kf_fn[Kf_fn > 2.5] = 2.5
+                    if np.count_nonzero(Kf_fn < 0.0) > 0:
+                        print('WARN: in TSM found %d values under 0.0, clamped to 0.0' % np.count_nonzero(Kf_fn < 0.0))
+                        Kf_fn[Kf_fn < 0.0] = 0.0
+
+                    krig_vals = np.array([Kf_fn[ngp] for ngp in obs_ngp])
+                    diagnostics().push("assim_info", (t, fuel_ndx, obs_vals, krig_vals, mod_vals, mod_na_vals))
+                    diagnostics().push("fm10_kriging_var", (t, np.mean(Vf_fn)))
+
+                    if cfg['write_fields'] == 'all':
+                        nctsmV[t,:,:] = Vf_fn
+
+                    # append to storage for kriged fields in this time instant
+                    Kfs.append(Kf_fn)
+                    Vfs.append(Vf_fn)
+                    fns.append(fuel_ndx)
+
+
+            # if there were any observations, run the kalman update step
+            if len(fns) > 0:
+                NobsClasses = len(fns)
+
+                O = np.zeros((dom_shape[0], dom_shape[1], NobsClasses))
+                V = np.zeros((dom_shape[0], dom_shape[1], NobsClasses, NobsClasses))
+
+                for i in range(NobsClasses):
+                    O[:,:,i] = Kfs[i]
+                    V[:,:,i,i] = Vfs[i]
+
+                # execute the Kalman update
+                if len(fns) == 1:
+                    models.kalman_update_single2(O, V, fns[0], Kg)
+                else:
+                    models.kalman_update(O, V, fns, Kg)
+
+                # push new diagnostic outputs
                 if cfg['write_fields'] == 'all':
-                    nctsmV[t,:,:] = Vf_fn
+                    ncKg[t,:,:] = Kg[:,:,1]
 
-                # append to storage for kriged fields in this time instant
-                Kfs.append(Kf_fn)
-                Vfs.append(Vf_fn)
-                fns.append(fuel_ndx)
+                for i in range(4):
+                    diagnostics().push("K%d_summary" % i, (t, np.amin(Kg[:,:,i]), np.mean(Kg[:,:,i]), np.amax(Kg[:,:,i])))
+                    if np.any(models.get_state()[:,:,i] < 0.0):
+                        print("WARN: in field %d there were %d negative moisture values !" % (i, np.count_nonzero(models.get_state()[:,:,i] < 0.0)))
+                        ind = np.unravel_index(np.argmin(models.get_state()[:,:,i]), models.get_state().shape[:2])
+                        print(models.P[ind[0],ind[1],:,:])
+                        print("TSM input at given position: value %g variance %g" % (O[ind[0],ind[1]], V[ind[0],ind[1]]))
+                        print("Model state at given position:")
+                        print(models.m_ext[ind[0],ind[1],:])
 
-
-        # if there were any observations, run the kalman update step
-        if len(fns) > 0:
-            NobsClasses = len(fns)
-
-            O = np.zeros((dom_shape[0], dom_shape[1], NobsClasses))
-            V = np.zeros((dom_shape[0], dom_shape[1], NobsClasses, NobsClasses))
-
-            for i in range(NobsClasses):
-                O[:,:,i] = Kfs[i]
-                V[:,:,i,i] = Vfs[i]
-
-            # execute the Kalman update
-            if len(fns) == 1:
-                models.kalman_update_single2(O, V, fns[0], Kg)
-            else:
-                models.kalman_update(O, V, fns, Kg)
-
-            # push new diagnostic outputs
+            # store post-assimilation (or forecast depending on whether observations were available) FM-10 state and variance
             if cfg['write_fields'] == 'all':
-                ncKg[t,:,:] = Kg[:,:,1]
-            diagnostics().push("K1_mean", (t, np.mean(Kg[:,:,1])))
+                ncfm10a[t,:,:] = models.get_state()[:,:,1]
+                ncfm10aV[t,:,:] = models.P[:,:,1,1]
 
-            if np.any(models.get_state()[:,:,:Nk] < 0.0):
-                print("WARN: %d negative moisture values found!" % (np.count_nonzero(models.get_state()[:,:,:] < 0.0)))
-
-        # store post-assimilation (or forecast depending on whether observations were available) FM-10 state and variance
-        if cfg['write_fields'] == 'all':
-            ncfm10a[t,:,:] = models.get_state()[:,:,1]
-            ncfm10aV[t,:,:] = models.P[:,:,1,1]
-
-        # we don't care if we assimilated or not, we always check our error on target station if in test mode
-        if test_mode:
-            valid_times = [z for z in tgt_obs_fm10.keys() if abs(total_seconds(z - model_time)) < assim_time_win/2.0]
-            tgt_i, tgt_j = test_ngp
-            diagnostics().push("test_pred", f[tgt_i, tgt_j,1])
-            if len(valid_times) > 0:
-              # this is our target observation [FIXME: this disregards multiple observations if multiple happen to be valid]
-              tgt_obs = tgt_obs_fm10[valid_times[0]][0]
-              obs = tgt_obs.get_value()
-              diagnostics().push("test_obs", obs)
-            else:
-              diagnostics().push("test_obs", np.nan)
+            # we don't care if we assimilated or not, we always check our error on target station if in test mode
+            if test_mode:
+                valid_times = [z for z in tgt_obs_fm10.keys() if abs(total_seconds(z - model_time)) < assim_time_win/2.0]
+                tgt_i, tgt_j = test_ngp
+                diagnostics().push("test_pred", f[tgt_i, tgt_j,1])
+                if len(valid_times) > 0:
+                  # this is our target observation [FIXME: this disregards multiple observations if multiple happen to be valid]
+                  tgt_obs = tgt_obs_fm10[valid_times[0]][0]
+                  obs = tgt_obs.get_value()
+                  diagnostics().push("test_obs", obs)
+                else:
+                  diagnostics().push("test_obs", np.nan)
 
 
-        # store data in wrf_file variable FMC_G
-        if cfg['write_fields']:
-            ncfmc_gc[t,:Nk,:,:] = np.transpose(models.get_state()[:,:,:Nk],axes=[2,0,1])
+            # store data in wrf_file variable FMC_G
+            if cfg['write_fields']:
+                ncfmc_gc[t,:Nk,:,:] = np.transpose(models.get_state()[:,:,:Nk],axes=[2,0,1])
 
-    # store the diagnostics in a binary file when done
+        # store the diagnostics in a binary file when done
     diagnostics().dump_store(os.path.join(cfg['output_dir'], 'diagnostics.bin'))
 
     # close the netCDF file (relevant if we did write into FMC_GC)

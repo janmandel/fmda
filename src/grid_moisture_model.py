@@ -1,4 +1,5 @@
 import numpy as np
+import sys
 
 
 class GridMoistureModel:
@@ -87,6 +88,8 @@ class GridMoistureModel:
 
         dS = m_ext[:, :, k + 1]
 
+        print('GMM: EdA (%g,%g,%g)  EwA (%g,%g,%g)' % (np.amin(EdA),np.mean(EdA),np.amax(EdA), np.amin(EwA),np.mean(EdA),np.amax(EdA)))
+
         assert np.all(EdA >= EwA)
 
         # re-initialize the Jacobian (in case we must recompute it)
@@ -126,6 +129,10 @@ class GridMoistureModel:
 
             dead_zone = (model_ids == 4)
 
+            # optional inspection of changes at given position
+            #dg_pos = (86,205)
+            #mi_old = m_i[dg_pos]
+
             # select appropriate integration method according to change for each fuel
             # and location
             rlag *= dt
@@ -136,20 +143,22 @@ class GridMoistureModel:
             m_i[small_change] += (equi[small_change] - m_i[small_change]) * change[small_change] * (
                 1.0 - 0.5 * change[small_change])
 
+            #print('Diag at 86,205 fuel %d: model_id %d equi %g rlag %g change %g value %g -> %g' % 
+            #        (i, model_ids[dg_pos], equi[dg_pos], rlag[dg_pos], change[dg_pos], mi_old, m_i[dg_pos]))
+
             # store in state matrix
             m_ext[:, :, i] = m_i
-
 
             # update model state covariance if requested using the old state (the jacobian must be computed as well)
             if mQ is not None:
 
-            # partial m_i/partial m_i
+                # partial m_i/partial m_i
                 Jii[big_change] = np.exp(-change[big_change])
                 Jii[small_change] = 1.0 - change[small_change] * (1.0 - 0.5 * change[small_change])
                 Jii[dead_zone] = 1.0
                 J[:, :, i, i] = Jii
 
-                # partial E/partial m_i
+                # partial m_i/partial deltaE
                 Jii[:] = 0.0
                 norain_big = np.logical_and(no_rain, big_change)
                 norain_small = np.logical_and(no_rain, small_change)
@@ -158,14 +167,14 @@ class GridMoistureModel:
                 Jii[dead_zone] = 0.0
                 J[:, :, i, k] = Jii
 
-                # partial S/partial m_i
+                # partial m_i / partial deltaS
                 Jii[:] = 0.0
                 rain_big = np.logical_and(has_rain, big_change)
                 rain_small = np.logical_and(has_rain, small_change)
                 Jii[rain_big] = 1.0 - np.exp(-change[rain_big])
                 Jii[rain_small] = change[rain_small] * (1.0 - 0.5 * change[rain_small])
                 Jii[dead_zone] = 0.0
-                J[:, :, i, k + 1] = Jii
+                J[:, :, i, k+1] = Jii
 
 
         # transformed to run in-place with one pre-allocated temporary
@@ -275,6 +284,10 @@ class GridMoistureModel:
     def kalman_update_single2(self, O, V, fuel_type, Kg):
 
         m_ext, P = self.m_ext, self.P
+
+        if np.any(O < 0.0):
+            print("ERROR: found negative observations!")
+            sys.exit(5)
 
         # I is dom_shape
         I = P[:, :, fuel_type, fuel_type] + V[:, :, 0, 0]
