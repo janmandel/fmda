@@ -297,8 +297,16 @@ class GridMoistureModel:
         if np.any(np.logical_or(Kg[:, :, fuel_type] > 1.0, Kg[:, :, fuel_type] < 0.0)):
             print("ERROR: some Kalman gains for 10-hr fuel are out of bounds.")
 
+        m_ext_old = m_ext.copy()
+
         # m_ext is dom_shape x dim, O[:,:,0] and m_ext[:,:,fuel_type] are dom_shape
         m_ext += Kg * (O - m_ext[:, :, fuel_type:fuel_type + 1])
+
+        mnpos = np.unravel_index(np.argmin(m_ext[:,:,1]),m_ext.shape[:2])
+        if m_ext[mnpos[0],mnpos[1],1] < 0.0:
+          print('NEGATIVE moisture in 10-hr field: %g -> %g, obs was %g and Kg was %g'
+                % (m_ext_old[mnpos[0],mnpos[1],1],m_ext[mnpos[0],mnpos[1],1],O[mnpos[0],mnpos[1]],Kg[mnpos[0],mnpos[1],1]))
+
 
         # try to do a tensor product here
         # Kg[:,:,:,newaxis] is shape dom_shape x dim x 1
