@@ -38,7 +38,7 @@ def extract_nearest_time_series(varnames,lat,lon,ncpath):
   # extract time strings (example 2012-09-14_23:00:00) & convert to datetime
   esmft = d.variables['Times'][:,:]
   times = map(lambda x: ''.join(x), esmft)
-  dts = map(lambda x: datetime(int(x[:4]),int(x[5:7]),int(x[8:10]), int(x[11:13]), 0, 0), times)
+  dts = map(lambda x: datetime(int(x[:4]),int(x[5:7]),int(x[8:10]),int(x[11:13]), int(x[14:16]), 0), times)
 
   d.close()
 
@@ -52,8 +52,9 @@ def extract_nearest_time_series(varnames,lat,lon,ncpath):
 
 def display_help():
   print('usage: %s <command> <nc-file> <arguments>' % sys.argv[0])
-  print('       extract_nearest <nc-file> lat lon varspec ...')
+  print('       extract_nearest_ts <nc-file> lat lon varspec ...')
   print('                        varspec is either a variable name or varname/index for 4d variables')
+  print('       extract_nearest_fm <nc-file> lat lon')
   print('')
   sys.exit(1)
 
@@ -73,12 +74,18 @@ if __name__ == '__main__':
   if len(sys.argv) < 2:
     display_help()
 
-  if sys.argv[1] == 'extract_nearest':
+  if sys.argv[1] == 'extract_nearest_ts':
     if len(sys.argv) < 6:
       display_help()
     ncpath = sys.argv[2]
     lat,lon = float(sys.argv[3]),float(sys.argv[4])
     vs = map(extract_varspec, sys.argv[5:])
+    extract_nearest_time_series(vs,lat,lon,ncpath)
+  elif sys.argv[1] == 'extract_nearest_fm':
+    ncpath = sys.argv[2]
+    lat,lon = float(sys.argv[3]),float(sys.argv[4])
+    # this ordering of variables matches load_wrf_data_csv.m in fmda_matlab
+    vs = [ 'T2', 'Q2', 'PSFC', 'RAINC', 'RAINNC', ('FMC_GC',0), ('FMC_GC',1), ('FMC_GC',2)]
     extract_nearest_time_series(vs,lat,lon,ncpath)
   else:
     display_help()
