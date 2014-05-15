@@ -52,7 +52,7 @@ def numerical_solve_bisect(e2, eps2, k):
 
 
 
-def trend_surface_model_kriging(obs_data, X):
+def fit_tsm(obs_data, X):
     """
     Trend surface model kriging, which assumes spatially uncorrelated errors.
     The kriging results in the matrix K, which contains the kriged observations

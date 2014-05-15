@@ -5,7 +5,7 @@ Created on Sun Oct 28 18:14:36 2012
 @author: martin
 """
 
-from kriging_methods import trend_surface_model_kriging
+from trend_surface_model import fit_tsm
 from wrf_model_data import WRFModelData
 from grid_moisture_model import GridMoistureModel
 from observation_stations import MesoWestStation
@@ -385,7 +385,7 @@ def run_module():
                     diagnostics().push("fm10na_rmse", np.mean((obs_vals - mod_na_vals)**2)**0.5)
 
                     # krige observations to grid points
-                    Kf_fn, Vf_fn = trend_surface_model_kriging(obs_valid_now, X)
+                    Kf_fn, Vf_fn = fit_tsm(obs_valid_now, X)
                     if np.count_nonzero(Kf_fn > 2.5) > 0:
                         rain_t = dynamic_covar_map['rain'][t,:,:]
                         print('WARN: in TSM found %d values over 2.5, %d of those had rain, clamped to 2.5' %
