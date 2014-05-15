@@ -4,12 +4,22 @@ import netCDF4
 import sys
 import numpy as np
 
-def find_closest_grid_point(slon, slat, glon, glat):
-    """
-    Finds the closest grid point to the given station longitude/lattitude.
-    """
-    closest = np.argmin((slon - glon)**2 + (slat - glat)**2)
-    return np.unravel_index(closest, glon.shape)
+from spatial_model_utilities import find_closest_grid_point, great_circle_distance
+
+
+def get_ngp(lat,lon,ncpath):
+  """
+  Finds the closest grid point to lat/lon, prints the indices and shows the distance to the point.
+  """
+  d = netCDF4.Dataset(ncpath)
+
+  # find closest grid point
+  glat,glon = d.variables['XLAT'][0,:,:], d.variables['XLONG'][0,:,:]
+  i,j = find_closest_grid_point(lon,lat,glon,glat)
+
+  dist = great_circle_distance(lon,lat,glon[i,j],glat[i,j])
+
+  print('GP closest to lat/lon %g,%g is %d,%d with distance %g km.' % (lat,lon,i,j,dist))
 
 
 def extract_nearest_time_series(varnames,lat,lon,ncpath):
@@ -52,9 +62,10 @@ def extract_nearest_time_series(varnames,lat,lon,ncpath):
 
 def display_help():
   print('usage: %s <command> <nc-file> <arguments>' % sys.argv[0])
-  print('       extract_nearest_ts <nc-file> lat lon varspec ...')
+  print('       varts <nc-file> lat lon varspec ...  -> extract variables from grid point closest to lat/lon')
   print('                        varspec is either a variable name or varname/index for 4d variables')
-  print('       extract_nearest_fm <nc-file> lat lon')
+  print('       fmts <nc-file> lat lon -> extract fm model variables from grid point closest to lat/lon')
+  print('       ngp <nc-file> lat lon -> find closest grid point and print it together with distance')
   print('')
   sys.exit(1)
 
@@ -74,19 +85,23 @@ if __name__ == '__main__':
   if len(sys.argv) < 2:
     display_help()
 
-  if sys.argv[1] == 'extract_nearest_ts':
+  if sys.argv[1] == 'varts':
     if len(sys.argv) < 6:
       display_help()
     ncpath = sys.argv[2]
     lat,lon = float(sys.argv[3]),float(sys.argv[4])
     vs = map(extract_varspec, sys.argv[5:])
     extract_nearest_time_series(vs,lat,lon,ncpath)
-  elif sys.argv[1] == 'extract_nearest_fm':
+  elif sys.argv[1] == 'fmts':
     ncpath = sys.argv[2]
     lat,lon = float(sys.argv[3]),float(sys.argv[4])
     # this ordering of variables matches load_wrf_data_csv.m in fmda_matlab
     vs = [ 'T2', 'Q2', 'PSFC', 'RAINC', 'RAINNC', ('FMC_GC',0), ('FMC_GC',1), ('FMC_GC',2)]
     extract_nearest_time_series(vs,lat,lon,ncpath)
+  elif sys.argv[1] == 'ngp':
+    ncpath = sys.argv[2]
+    lat,lon = float(sys.argv[3]),float(sys.argv[4])
+    get_ngp(lat,lon,ncpath)
   else:
     display_help()
 
