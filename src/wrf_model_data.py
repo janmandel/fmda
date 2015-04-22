@@ -65,6 +65,9 @@ class WRFModelData:
             # remove the fields to reduce memory consumption
             del self.fields['RAINNC']
             del self.fields['RAINC']
+        else:
+            # if no rainfall data is available, we set RAIN to zeros
+            self.fields['RAIN'] = np.zeros_like(self.fields['lat'])
 
         # precompute the equilibrium fields needed everywhere
         self.equilibrium_moisture()
