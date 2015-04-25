@@ -3,7 +3,6 @@ from diagnostics import diagnostics
 import numpy as np
 
 
-
 def numerical_solve_bisect(e2, eps2, k):
     """
     Solve the estimator equation using bisection.
@@ -81,7 +80,7 @@ def fit_tsm(obs_data, X):
         p = obs.get_nearest_grid_point()
         y[i,0] = obs.get_value()
         Xobs[i,:] = X[p[0], p[1], :Nallcov]
-        obs_var[i] = obs.get_measurement_variance()
+        obs_var[i] = obs.get_variance()
 
     # remove covariates that contain only zeros
     norms = np.sum(Xobs**2, axis = 0) ** 0.5
